@@ -1,18 +1,414 @@
 <?php
 // OpenFalcon plugin config UI — renders inside FPP's plugin config area
-
 $skipJSsettings = true;
 include_once "/opt/fpp/www/config.php";
 include_once "/opt/fpp/www/common.php";
 $pluginName = "openfalcon";
 $pluginConfigFile = $settings['configDirectory'] . "/plugin." . $pluginName;
-$pluginSettings = parse_ini_file($pluginConfigFile);
+$pluginSettings = @parse_ini_file($pluginConfigFile) ?: array();
+
+$pluginVersion = "0.6.1";
+
+// Helper for safe display of saved values
+function val($settings, $key, $default = '') {
+    return urldecode($settings[$key] ?? $default);
+}
+
+// Determine if listener is running
+$listenerRunning = false;
+$ps = @shell_exec("pgrep -f openfalcon_listener.php");
+if (!empty(trim((string)$ps))) {
+    $listenerRunning = true;
+}
 ?>
 
+<style>
+  .of-page { max-width: 1100px; margin: 0 auto; padding: 1rem 1.25rem; color: #1a1a1a; }
+  .of-page h1 { font-size: 2rem; font-weight: 700; margin-bottom: 1.5rem; color: #111; }
+  .of-page h2 { font-size: 1.5rem; font-weight: 700; color: #c00; margin: 2rem 0 1rem; text-align: center; }
+
+  .of-banner { padding: 1.25rem; border-radius: 10px; text-align: center; font-weight: 600;
+               font-size: 1.05rem; margin-bottom: 1.5rem; }
+  .of-banner.running { background: #e7f8ec; color: #138a3e; border: 1px solid #b6e4c4; }
+  .of-banner.stopped { background: #fdecec; color: #c00; border: 1px solid #f6c2c2; }
+
+  .of-row { display: grid; grid-template-columns: 1fr 1.4fr; gap: 1rem; padding: 1.1rem 0;
+            border-bottom: 1px solid #ececec; align-items: start; }
+  .of-row:last-child { border-bottom: none; }
+  .of-row .of-label { font-weight: 700; font-size: 1rem; }
+  .of-row .of-help { color: #6b6b6b; font-size: 0.9rem; line-height: 1.45; margin-top: 0.25rem; }
+  .of-row .of-help code { background: #f3f3f3; padding: 0.05rem 0.35rem; border-radius: 4px;
+                          font-size: 0.85em; }
+  .of-row .of-help.warn { color: #c00; font-weight: 600; }
+  .of-row .of-control { display: flex; flex-direction: column; gap: 0.5rem; }
+
+  .of-input, .of-select, .of-textarea {
+    width: 100%; padding: 0.6rem 0.75rem; border: 1px solid #ccc; border-radius: 6px;
+    font-size: 0.95rem; font-family: inherit; background: white;
+  }
+  .of-input:focus, .of-select:focus, .of-textarea:focus {
+    outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.15);
+  }
+  .of-textarea { min-height: 200px; font-family: ui-monospace, Menlo, Consolas, monospace;
+                 font-size: 0.85rem; }
+
+  /* Toggle switch (RF-style green check / red X) */
+  .of-toggle { position: relative; display: inline-block; width: 56px; height: 30px; cursor: pointer; }
+  .of-toggle input { opacity: 0; width: 0; height: 0; }
+  .of-toggle-slider { position: absolute; inset: 0; background: #d65a5a; border-radius: 30px;
+                      transition: 0.2s; display: flex; align-items: center; padding: 0 8px;
+                      color: white; font-size: 14px; font-weight: bold; }
+  .of-toggle-slider::before { content: "✗"; margin-left: auto; }
+  .of-toggle-slider::after { content: ""; position: absolute; height: 22px; width: 22px; left: 4px;
+                             bottom: 4px; background: white; border-radius: 50%; transition: 0.2s; }
+  .of-toggle input:checked + .of-toggle-slider { background: #4caf50; }
+  .of-toggle input:checked + .of-toggle-slider::before { content: "✓"; margin-left: 0; margin-right: auto; }
+  .of-toggle input:checked + .of-toggle-slider::after { transform: translateX(26px); }
+
+  .of-btn { display: inline-block; padding: 0.55rem 1.1rem; border-radius: 999px;
+            font-size: 0.92rem; font-weight: 600; cursor: pointer; border: 2px solid;
+            background: white; transition: all 0.15s; text-decoration: none; }
+  .of-btn-primary { color: #2563eb; border-color: #2563eb; }
+  .of-btn-primary:hover { background: #2563eb; color: white; }
+  .of-btn-success { color: #138a3e; border-color: #138a3e; }
+  .of-btn-success:hover { background: #138a3e; color: white; }
+  .of-btn-danger { color: #c00; border-color: #c00; }
+  .of-btn-danger:hover { background: #c00; color: white; }
+  .of-btn-neutral { color: #444; border-color: #888; }
+  .of-btn-neutral:hover { background: #444; color: white; }
+
+  .of-btn-group { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+  .of-status { font-size: 0.9rem; }
+  .of-status.success { color: #138a3e; font-weight: 600; }
+  .of-status.error { color: #c00; font-weight: 600; }
+  .of-status.muted { color: #6b6b6b; }
+
+  .of-section-header { text-align: center; }
+  .of-section-header h2 { display: inline-block; }
+  .of-section-header .of-section-sub { display: block; font-size: 0.95rem; color: #6b6b6b;
+                                        font-weight: normal; margin-top: 0.25rem; }
+
+  .of-log-output { background: #1a1a1a; color: #e6edf3; border-radius: 8px; padding: 1rem;
+                   font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.82rem;
+                   white-space: pre-wrap; word-break: break-all; max-height: 320px; overflow-y: auto;
+                   line-height: 1.45; }
+  .of-log-output:empty::before { content: "Click \"Tail Log\" to load recent log lines."; color: #6b7280; font-style: italic; }
+
+  .of-page-footer { text-align: center; font-size: 0.85rem; color: #6b6b6b; margin-top: 2rem;
+                    padding-top: 1.25rem; border-top: 1px solid #ececec; }
+  .of-page-footer a { color: #2563eb; text-decoration: none; }
+  .of-page-footer a:hover { text-decoration: underline; }
+
+  @media (max-width: 720px) {
+    .of-row { grid-template-columns: 1fr; }
+  }
+</style>
+
+<div class="of-page">
+  <h1>OpenFalcon Plugin <span style="color: #888; font-weight: 400; font-size: 0.7em;">v<?php echo htmlspecialchars($pluginVersion); ?></span></h1>
+
+  <!-- ============================================ -->
+  <!-- LISTENER STATUS BANNER                       -->
+  <!-- ============================================ -->
+  <div id="listenerBanner" class="of-banner <?php echo $listenerRunning ? 'running' : 'stopped'; ?>">
+    <?php echo $listenerRunning ? 'OpenFalcon Listener is Running' : 'OpenFalcon Listener is Stopped'; ?>
+  </div>
+
+  <!-- ============================================ -->
+  <!-- SERVER CONNECTION                            -->
+  <!-- ============================================ -->
+  <div class="of-section-header">
+    <h2>Server Connection</h2>
+  </div>
+
+  <div class="of-row">
+    <div>
+      <div class="of-label">Server URL</div>
+      <div class="of-help">
+        Where your self-hosted OpenFalcon server is reachable.
+        e.g. <code>http://192.168.1.230:3100</code> or <code>https://lights.yourdomain.com</code>.
+        No trailing slash.
+      </div>
+    </div>
+    <div class="of-control">
+      <input type="text" class="of-input" id="serverUrl"
+             value="<?php echo htmlspecialchars(val($pluginSettings, 'serverUrl')); ?>"
+             onchange="SetPluginSetting('<?php echo $pluginName; ?>','serverUrl',encodeURIComponent(this.value));" />
+    </div>
+  </div>
+
+  <div class="of-row">
+    <div>
+      <div class="of-label">Show Token</div>
+      <div class="of-help">
+        Copy this from your OpenFalcon admin dashboard
+        ("Show Token (for OpenFalcon Plugin)" section).
+      </div>
+    </div>
+    <div class="of-control">
+      <input type="text" class="of-input" id="showToken"
+             value="<?php echo htmlspecialchars(val($pluginSettings, 'showToken')); ?>"
+             onchange="SetPluginSetting('<?php echo $pluginName; ?>','showToken',encodeURIComponent(this.value));" />
+    </div>
+  </div>
+
+  <!-- ============================================ -->
+  <!-- PLAYLIST SETUP                               -->
+  <!-- ============================================ -->
+  <div class="of-section-header">
+    <h2>Playlist Setup</h2>
+  </div>
+
+  <div class="of-row">
+    <div>
+      <div class="of-label">Remote Playlist</div>
+      <div class="of-help">
+        The FPP playlist that contains the pool of sequences your viewers can vote for or request.
+      </div>
+    </div>
+    <div class="of-control">
+      <select class="of-select" id="remotePlaylist"
+              onchange="SetPluginSetting('<?php echo $pluginName; ?>','remotePlaylist',encodeURIComponent(this.value));">
+        <option value="">-- Select a playlist --</option>
+        <?php
+        $currentPlaylist = val($pluginSettings, 'remotePlaylist');
+        $playlists = @scandir($settings['playlistDirectory']);
+        if ($playlists) {
+            foreach ($playlists as $pl) {
+                if (substr($pl, -5) !== '.json') continue;
+                $name = basename($pl, '.json');
+                $selected = ($name === $currentPlaylist) ? 'selected' : '';
+                echo '<option value="' . htmlspecialchars($name) . '" ' . $selected . '>'
+                   . htmlspecialchars($name) . '</option>';
+            }
+        }
+        ?>
+      </select>
+    </div>
+  </div>
+
+  <div class="of-row">
+    <div>
+      <div class="of-label">Sync Sequences with OpenFalcon</div>
+      <div class="of-help">
+        Reads the selected playlist and pushes its sequences to OpenFalcon.
+        Run this whenever you add or remove sequences from the playlist.
+      </div>
+    </div>
+    <div class="of-control">
+      <div class="of-btn-group">
+        <button type="button" class="of-btn of-btn-primary" onclick="syncPlaylist();">Sync Now</button>
+        <span id="syncStatus" class="of-status muted"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================ -->
+  <!-- BEHAVIOR                                     -->
+  <!-- ============================================ -->
+  <div class="of-section-header">
+    <h2>Behavior</h2>
+  </div>
+
+  <div class="of-row">
+    <div>
+      <div class="of-label">Interrupt Schedule</div>
+      <div class="of-help">
+        Determines if a request or vote will interrupt the normal schedule.
+        Required if your remote playlist is a separate "pool" of viewer-controllable songs
+        (rather than the playlist that's currently playing).
+      </div>
+    </div>
+    <div class="of-control">
+      <label class="of-toggle">
+        <input type="checkbox" id="interruptSchedule"
+               <?php echo (val($pluginSettings, 'interruptSchedule') === 'true') ? 'checked' : ''; ?>
+               onchange="SetPluginSetting('<?php echo $pluginName; ?>','interruptSchedule',encodeURIComponent(this.checked ? 'true' : 'false'));" />
+        <span class="of-toggle-slider"></span>
+      </label>
+    </div>
+  </div>
+
+  <div class="of-row">
+    <div>
+      <div class="of-label">Request/Vote Fetch Time</div>
+      <div class="of-help">
+        Number of seconds before the end of the current sequence to fetch the next vote winner / jukebox request.
+        Default: <code>3</code>. Range: 1–5.
+      </div>
+    </div>
+    <div class="of-control">
+      <input type="number" class="of-input" id="requestFetchTime" min="1" max="5"
+             value="<?php echo htmlspecialchars(val($pluginSettings, 'requestFetchTime', '3')); ?>"
+             onchange="SetPluginSetting('<?php echo $pluginName; ?>','requestFetchTime',encodeURIComponent(this.value));" />
+    </div>
+  </div>
+
+  <div class="of-row">
+    <div>
+      <div class="of-label">Additional Wait Time</div>
+      <div class="of-help">
+        Extra seconds to wait after queuing a sequence before checking for the next one.
+        Helpful if you're seeing requests get skipped or duplicated.
+        Default: <code>0</code>.
+      </div>
+    </div>
+    <div class="of-control">
+      <input type="number" class="of-input" id="additionalWaitTime" min="0" max="10"
+             value="<?php echo htmlspecialchars(val($pluginSettings, 'additionalWaitTime', '0')); ?>"
+             onchange="SetPluginSetting('<?php echo $pluginName; ?>','additionalWaitTime',encodeURIComponent(this.value));" />
+    </div>
+  </div>
+
+  <div class="of-row">
+    <div>
+      <div class="of-label">FPP Status Check Time</div>
+      <div class="of-help">
+        How often the plugin polls FPP's status API.
+        Lower = more responsive, higher CPU. Default: <code>1</code> (second).
+      </div>
+    </div>
+    <div class="of-control">
+      <input type="number" class="of-input" id="fppStatusCheckTime" min="1" max="5"
+             value="<?php echo htmlspecialchars(val($pluginSettings, 'fppStatusCheckTime', '1')); ?>"
+             onchange="SetPluginSetting('<?php echo $pluginName; ?>','fppStatusCheckTime',encodeURIComponent(this.value));" />
+    </div>
+  </div>
+
+  <!-- ============================================ -->
+  <!-- LISTENER CONTROL                             -->
+  <!-- ============================================ -->
+  <div class="of-section-header">
+    <h2>Listener Control</h2>
+  </div>
+
+  <div class="of-row">
+    <div>
+      <div class="of-label">Restart Listener</div>
+      <div class="of-help">
+        Reloads the plugin config and restarts the polling loop.
+        Run this after changing config values via "Plugin Config" below.
+      </div>
+    </div>
+    <div class="of-control">
+      <div class="of-btn-group">
+        <button type="button" class="of-btn of-btn-primary" onclick="restartListener();">Restart Listener</button>
+        <span id="restartStatus" class="of-status muted"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="of-row">
+    <div>
+      <div class="of-label">Stop Listener</div>
+      <div class="of-help warn">
+        WARNING: This stops the plugin entirely. No requests/votes will be fetched and no playback state will be reported to OpenFalcon.
+      </div>
+    </div>
+    <div class="of-control">
+      <div class="of-btn-group">
+        <button type="button" class="of-btn of-btn-danger" onclick="stopListener();">Stop Listener</button>
+        <span id="stopStatus" class="of-status muted"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================ -->
+  <!-- DIAGNOSTICS                                  -->
+  <!-- ============================================ -->
+  <div class="of-section-header">
+    <h2>Diagnostics</h2>
+  </div>
+
+  <div class="of-row">
+    <div>
+      <div class="of-label">Test Connectivity</div>
+      <div class="of-help">
+        Pings the OpenFalcon server using the Show Token to verify it's reachable
+        and the token is correct.
+      </div>
+    </div>
+    <div class="of-control">
+      <div class="of-btn-group">
+        <button type="button" class="of-btn of-btn-primary" onclick="testConnectivity();">Test Connectivity</button>
+        <span id="connectivityStatus" class="of-status muted"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="of-row">
+    <div>
+      <div class="of-label">Listener Log (tail)</div>
+      <div class="of-help">
+        Latest lines from <code>/home/fpp/media/logs/openfalcon-listener.log</code>.
+        Auto-refreshes every 5 seconds while shown.
+      </div>
+    </div>
+    <div class="of-control">
+      <div class="of-btn-group">
+        <button type="button" class="of-btn of-btn-neutral" onclick="tailLog();">Tail Log (50 lines)</button>
+        <button type="button" class="of-btn of-btn-neutral" onclick="toggleAutoTail();" id="autoTailBtn">Auto-Refresh: Off</button>
+      </div>
+      <pre id="logOutput" class="of-log-output"></pre>
+    </div>
+  </div>
+
+  <!-- ============================================ -->
+  <!-- ADVANCED / DEVELOPER                         -->
+  <!-- ============================================ -->
+  <div class="of-section-header">
+    <h2>Developer Settings</h2>
+    <span class="of-section-sub">Probably best to leave these alone…</span>
+  </div>
+
+  <div class="of-row">
+    <div>
+      <div class="of-label">Verbose Logging</div>
+      <div class="of-help">
+        Logs every API call. Useful for debugging.
+        <span style="color: #c00; font-weight: 600;">Will produce a lot of log output.</span>
+      </div>
+    </div>
+    <div class="of-control">
+      <label class="of-toggle">
+        <input type="checkbox" id="verboseLogging"
+               <?php echo (val($pluginSettings, 'verboseLogging') === 'true') ? 'checked' : ''; ?>
+               onchange="SetPluginSetting('<?php echo $pluginName; ?>','verboseLogging',encodeURIComponent(this.checked ? 'true' : 'false'));" />
+        <span class="of-toggle-slider"></span>
+      </label>
+    </div>
+  </div>
+
+  <div class="of-row">
+    <div>
+      <div class="of-label">Plugin Config (raw)</div>
+      <div class="of-help warn">
+        WARNING: Editing these values directly can break the plugin.
+        Click <em>Load Config</em> to view, edit, and <em>Save Config</em> to persist.
+        After saving, click <em>Restart Listener</em>.
+      </div>
+    </div>
+    <div class="of-control">
+      <textarea id="rawConfig" class="of-textarea" placeholder="Click 'Load Config' to view current config…"></textarea>
+      <div class="of-btn-group">
+        <button type="button" class="of-btn of-btn-neutral" onclick="loadRawConfig();">Load Config</button>
+        <button type="button" class="of-btn of-btn-success" onclick="saveRawConfig();">Save Config</button>
+        <span id="rawConfigStatus" class="of-status muted"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="of-page-footer">
+    OpenFalcon &middot; <a href="https://github.com/frankietest6/openfalcon" target="_blank" rel="noopener">Server</a> &middot;
+    <a href="https://github.com/frankietest6/openfalcon-plugin" target="_blank" rel="noopener">Plugin source</a>
+  </div>
+</div>
+
 <script type="text/javascript">
+  // ============================================================
+  // FPP setting save (REST API)
+  // ============================================================
   async function SetPluginSetting(plugin, key, value) {
-    // FPP REST endpoint for plugin settings: POST /api/plugin/<plugin>/settings/<key>
-    // value comes URL-encoded from inline onChange handlers; decode for the body
     const rawValue = decodeURIComponent(value);
     try {
       const res = await fetch('/api/plugin/' + encodeURIComponent(plugin) + '/settings/' + encodeURIComponent(key), {
@@ -20,23 +416,24 @@ $pluginSettings = parse_ini_file($pluginConfigFile);
         headers: { 'Content-Type': 'text/plain' },
         body: rawValue,
       });
-      if (!res.ok) {
-        console.error('Save failed:', res.status, await res.text());
-      }
+      if (!res.ok) console.error('Save failed:', res.status, await res.text());
     } catch (err) {
       console.error('Save error:', err);
     }
   }
 
-  function prettifyName(name) {
-    return (name || '').replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ').trim();
-  }
-
-  function setSyncStatus(msg, kind) {
-    const el = document.getElementById('syncStatus');
+  function setStatus(id, msg, kind) {
+    const el = document.getElementById(id);
     if (!el) return;
     el.textContent = msg;
-    el.style.color = kind === 'error' ? '#c00' : kind === 'success' ? '#080' : '#666';
+    el.className = 'of-status ' + (kind || 'muted');
+  }
+
+  // ============================================================
+  // Sync Playlist (reads FPP playlist JSON, posts to OpenFalcon)
+  // ============================================================
+  function prettifyName(name) {
+    return (name || '').replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ').trim();
   }
 
   async function syncPlaylist() {
@@ -45,39 +442,35 @@ $pluginSettings = parse_ini_file($pluginConfigFile);
     const playlist = document.getElementById('remotePlaylist').value;
 
     if (!serverUrl || !showToken) {
-      setSyncStatus('Set Server URL and Show Token first', 'error');
+      setStatus('syncStatus', 'Set Server URL and Show Token first', 'error');
       return;
     }
     if (!playlist) {
-      setSyncStatus('Select a Remote Playlist first', 'error');
+      setStatus('syncStatus', 'Select a Remote Playlist first', 'error');
       return;
     }
 
-    setSyncStatus('Loading playlist from FPP…');
+    setStatus('syncStatus', 'Loading playlist from FPP…', 'muted');
 
     try {
       const plRes = await fetch('/api/playlist/' + encodeURIComponent(playlist));
       if (!plRes.ok) {
-        setSyncStatus('Could not load playlist from FPP (' + plRes.status + ')', 'error');
+        setStatus('syncStatus', 'Could not load playlist from FPP (' + plRes.status + ')', 'error');
         return;
       }
       const plData = await plRes.json();
       const items = (plData && plData.mainPlaylist) || [];
       if (items.length === 0) {
-        setSyncStatus('Playlist is empty', 'error');
+        setStatus('syncStatus', 'Playlist is empty', 'error');
         return;
       }
 
-      // Build sequence list
       const sequences = [];
-      let playlistIndex = 1;  // FPP's Insert Playlist command uses 1-based indexes
+      let playlistIndex = 1;
       items.forEach(function(item) {
         let fileName = '';
-        if (item.type === 'both' || item.type === 'sequence') {
-          fileName = item.sequenceName || '';
-        } else if (item.type === 'media') {
-          fileName = item.mediaName || '';
-        }
+        if (item.type === 'both' || item.type === 'sequence') fileName = item.sequenceName || '';
+        else if (item.type === 'media') fileName = item.mediaName || '';
         if (!fileName) return;
         const name = fileName.replace(/\.[^.]+$/, '');
         sequences.push({
@@ -90,11 +483,11 @@ $pluginSettings = parse_ini_file($pluginConfigFile);
       });
 
       if (sequences.length === 0) {
-        setSyncStatus('No playable sequences in playlist', 'error');
+        setStatus('syncStatus', 'No playable sequences in playlist', 'error');
         return;
       }
 
-      setSyncStatus('Pushing ' + sequences.length + ' sequences to OpenFalcon…');
+      setStatus('syncStatus', 'Pushing ' + sequences.length + ' sequences to OpenFalcon…', 'muted');
 
       const syncRes = await fetch(serverUrl + '/api/plugin/sync-sequences', {
         method: 'POST',
@@ -102,189 +495,159 @@ $pluginSettings = parse_ini_file($pluginConfigFile);
           'Authorization': 'Bearer ' + showToken,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          playlistName: playlist,
-          sequences: sequences,
-        }),
+        body: JSON.stringify({ playlistName: playlist, sequences: sequences }),
       });
 
       if (!syncRes.ok) {
         const errText = await syncRes.text();
-        setSyncStatus('Server error (' + syncRes.status + '): ' + errText.substring(0, 200), 'error');
+        setStatus('syncStatus', 'Server error (' + syncRes.status + ')', 'error');
+        console.error('Sync error body:', errText);
         return;
       }
 
       const data = await syncRes.json();
-      setSyncStatus('✓ Synced ' + (data.synced || sequences.length) + ' sequences to OpenFalcon', 'success');
-
+      setStatus('syncStatus', '✓ Synced ' + (data.synced || sequences.length) + ' sequences', 'success');
     } catch (err) {
-      setSyncStatus('Sync failed: ' + err.message, 'error');
+      setStatus('syncStatus', 'Sync failed: ' + err.message, 'error');
       console.error(err);
     }
   }
+
+  // ============================================================
+  // Connectivity test
+  // ============================================================
+  async function testConnectivity() {
+    const serverUrl = document.getElementById('serverUrl').value.trim().replace(/\/$/, '');
+    const showToken = document.getElementById('showToken').value.trim();
+    if (!serverUrl || !showToken) {
+      setStatus('connectivityStatus', 'Set Server URL and Show Token first', 'error');
+      return;
+    }
+    setStatus('connectivityStatus', 'Pinging…', 'muted');
+    const start = performance.now();
+    try {
+      const res = await fetch(serverUrl + '/api/plugin/health', {
+        headers: { 'Authorization': 'Bearer ' + showToken },
+      });
+      const ms = Math.round(performance.now() - start);
+      if (res.ok) {
+        setStatus('connectivityStatus', '✓ OpenFalcon reachable (' + ms + ' ms)', 'success');
+      } else {
+        setStatus('connectivityStatus', '✗ HTTP ' + res.status + ' from server', 'error');
+      }
+    } catch (err) {
+      setStatus('connectivityStatus', '✗ Connection failed: ' + err.message, 'error');
+    }
+  }
+
+  // ============================================================
+  // Listener control (uses FPP's command runner via plugin commands)
+  // ============================================================
+  async function runFppCommand(commandName) {
+    // FPP REST: POST /api/command — body is JSON { command: ..., args: [] }
+    return fetch('/api/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: commandName, args: [] }),
+    });
+  }
+
+  async function restartListener() {
+    setStatus('restartStatus', 'Restarting…', 'muted');
+    try {
+      await runFppCommand('OpenFalcon - Restart Listener');
+      setTimeout(() => {
+        setStatus('restartStatus', '✓ Listener restarted (refresh page to confirm)', 'success');
+      }, 1500);
+    } catch (err) {
+      setStatus('restartStatus', '✗ ' + err.message, 'error');
+    }
+  }
+
+  async function stopListener() {
+    if (!confirm('Stop the OpenFalcon listener?\nViewers will not be able to control the show until you restart it.')) return;
+    setStatus('stopStatus', 'Stopping…', 'muted');
+    try {
+      await runFppCommand('OpenFalcon - Stop Listener');
+      setTimeout(() => {
+        setStatus('stopStatus', '✓ Listener stopped (refresh page to confirm)', 'success');
+      }, 1500);
+    } catch (err) {
+      setStatus('stopStatus', '✗ ' + err.message, 'error');
+    }
+  }
+
+  // ============================================================
+  // Tail log
+  // ============================================================
+  let autoTailTimer = null;
+
+  async function tailLog() {
+    const out = document.getElementById('logOutput');
+    try {
+      const res = await fetch('/api/file/Logs/openfalcon-listener.log?tail=50');
+      if (!res.ok) {
+        out.textContent = '(failed to load: HTTP ' + res.status + ')';
+        return;
+      }
+      out.textContent = await res.text();
+      out.scrollTop = out.scrollHeight;
+    } catch (err) {
+      out.textContent = '(error: ' + err.message + ')';
+    }
+  }
+
+  function toggleAutoTail() {
+    const btn = document.getElementById('autoTailBtn');
+    if (autoTailTimer) {
+      clearInterval(autoTailTimer);
+      autoTailTimer = null;
+      btn.textContent = 'Auto-Refresh: Off';
+    } else {
+      tailLog();
+      autoTailTimer = setInterval(tailLog, 5000);
+      btn.textContent = 'Auto-Refresh: On';
+    }
+  }
+
+  // ============================================================
+  // Raw config viewer/editor
+  // ============================================================
+  async function loadRawConfig() {
+    const out = document.getElementById('rawConfig');
+    try {
+      const res = await fetch('/api/configfile/plugin.openfalcon');
+      if (!res.ok) {
+        setStatus('rawConfigStatus', 'Load failed: HTTP ' + res.status, 'error');
+        return;
+      }
+      out.value = await res.text();
+      setStatus('rawConfigStatus', 'Loaded.', 'success');
+    } catch (err) {
+      setStatus('rawConfigStatus', 'Load failed: ' + err.message, 'error');
+    }
+  }
+
+  async function saveRawConfig() {
+    const content = document.getElementById('rawConfig').value;
+    if (!content.trim()) {
+      setStatus('rawConfigStatus', 'Empty config — refusing to save.', 'error');
+      return;
+    }
+    if (!confirm('Save this config and overwrite the current one?')) return;
+    try {
+      const res = await fetch('/api/configfile/plugin.openfalcon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: content,
+      });
+      if (res.ok) {
+        setStatus('rawConfigStatus', '✓ Saved. Restart listener for changes to take effect.', 'success');
+      } else {
+        setStatus('rawConfigStatus', 'Save failed: HTTP ' + res.status, 'error');
+      }
+    } catch (err) {
+      setStatus('rawConfigStatus', 'Save failed: ' + err.message, 'error');
+    }
+  }
 </script>
-
-<div id="openfalcon-config" style="max-width: 800px;">
-  <h2>OpenFalcon Plugin Configuration</h2>
-
-  <p style="color: #666;">
-    Connects FPP to your self-hosted OpenFalcon server. See
-    <a href="https://github.com/willsterrett/openfalcon-plugin" target="_blank">documentation</a> for details.
-  </p>
-
-  <table class="settingsTable">
-
-    <tr>
-      <th colspan="2"><h3>Server Connection</h3></th>
-    </tr>
-
-    <tr>
-      <td><label for="serverUrl">Server URL:</label></td>
-      <td>
-        <input type="text" id="serverUrl" size="60"
-               value="<?php echo urldecode($pluginSettings['serverUrl'] ?? ''); ?>"
-               onChange="SetPluginSetting('<?php echo $pluginName; ?>','serverUrl',encodeURIComponent(this.value));" />
-        <div style="color: #666; font-size: 0.9em;">
-          e.g. <code>http://192.168.1.230:3100</code> or <code>https://lights.yourdomain.com</code><br>
-          No trailing slash.
-        </div>
-      </td>
-    </tr>
-
-    <tr>
-      <td><label for="showToken">Show Token:</label></td>
-      <td>
-        <input type="text" id="showToken" size="60"
-               value="<?php echo urldecode($pluginSettings['showToken'] ?? ''); ?>"
-               onChange="SetPluginSetting('<?php echo $pluginName; ?>','showToken',encodeURIComponent(this.value));" />
-        <div style="color: #666; font-size: 0.9em;">
-          From your OpenFalcon admin dashboard.
-        </div>
-      </td>
-    </tr>
-
-    <tr>
-      <th colspan="2"><h3>Playlist Setup</h3></th>
-    </tr>
-
-    <tr>
-      <td><label for="remotePlaylist">Remote Playlist:</label></td>
-      <td>
-        <select id="remotePlaylist"
-                onChange="SetPluginSetting('<?php echo $pluginName; ?>','remotePlaylist',encodeURIComponent(this.value));">
-          <option value="">-- Select a playlist --</option>
-          <?php
-          $currentPlaylist = urldecode($pluginSettings['remotePlaylist'] ?? '');
-          $playlists = @scandir($settings['playlistDirectory']);
-          if ($playlists) {
-              foreach ($playlists as $pl) {
-                  if (substr($pl, -5) !== '.json') continue;
-                  $name = basename($pl, '.json');
-                  $selected = ($name === $currentPlaylist) ? 'selected' : '';
-                  echo "<option value=\"" . htmlspecialchars($name) . "\" $selected>" . htmlspecialchars($name) . "</option>";
-              }
-          }
-          ?>
-        </select>
-        <div style="color: #666; font-size: 0.9em;">
-          The FPP playlist containing your viewer-controllable sequences.
-        </div>
-      </td>
-    </tr>
-
-    <tr>
-      <td><label>Sync Playlist:</label></td>
-      <td>
-        <button type="button" onclick="syncPlaylist();"
-                style="padding: 0.5em 1em; font-size: 1em; cursor: pointer;">
-          Sync Playlist to OpenFalcon
-        </button>
-        <span id="syncStatus" style="margin-left: 1em; font-size: 0.9em;"></span>
-        <div style="color: #666; font-size: 0.9em; margin-top: 0.4em;">
-          Reads the selected playlist and pushes its sequences to OpenFalcon.
-          Run this whenever you add/remove sequences from the playlist.
-        </div>
-      </td>
-    </tr>
-
-    <tr>
-      <th colspan="2"><h3>Behavior</h3></th>
-    </tr>
-
-    <tr>
-      <td><label for="interruptSchedule">Interrupt Schedule:</label></td>
-      <td>
-        <input type="checkbox" id="interruptSchedule"
-               <?php echo (urldecode($pluginSettings['interruptSchedule'] ?? '') === 'true') ? 'checked' : ''; ?>
-               onChange="SetPluginSetting('<?php echo $pluginName; ?>','interruptSchedule',encodeURIComponent(this.checked ? 'true' : 'false'));" />
-        <span style="color: #666; font-size: 0.9em;">
-          If checked, viewer requests play immediately. Otherwise they queue after the current song.
-        </span>
-      </td>
-    </tr>
-
-    <tr>
-      <td><label for="requestFetchTime">Request Fetch Time (seconds):</label></td>
-      <td>
-        <input type="number" id="requestFetchTime" min="1" max="10" size="5"
-               value="<?php echo urldecode($pluginSettings['requestFetchTime'] ?? '3'); ?>"
-               onChange="SetPluginSetting('<?php echo $pluginName; ?>','requestFetchTime',encodeURIComponent(this.value));" />
-        <span style="color: #666; font-size: 0.9em;">
-          How many seconds before end of current song to fetch the next request. Default: 3.
-        </span>
-      </td>
-    </tr>
-
-    <tr>
-      <td><label for="additionalWaitTime">Additional Wait Time (seconds):</label></td>
-      <td>
-        <input type="number" id="additionalWaitTime" min="0" max="10" size="5"
-               value="<?php echo urldecode($pluginSettings['additionalWaitTime'] ?? '0'); ?>"
-               onChange="SetPluginSetting('<?php echo $pluginName; ?>','additionalWaitTime',encodeURIComponent(this.value));" />
-        <span style="color: #666; font-size: 0.9em;">
-          Extra seconds to wait after queueing. Default: 0.
-        </span>
-      </td>
-    </tr>
-
-    <tr>
-      <td><label for="fppStatusCheckTime">FPP Poll Interval (seconds):</label></td>
-      <td>
-        <input type="number" id="fppStatusCheckTime" min="0.5" max="5" step="0.5" size="5"
-               value="<?php echo urldecode($pluginSettings['fppStatusCheckTime'] ?? '1'); ?>"
-               onChange="SetPluginSetting('<?php echo $pluginName; ?>','fppStatusCheckTime',encodeURIComponent(this.value));" />
-        <span style="color: #666; font-size: 0.9em;">
-          How often to poll FPP's status API. Default: 1.
-        </span>
-      </td>
-    </tr>
-
-    <tr>
-      <th colspan="2"><h3>Logging</h3></th>
-    </tr>
-
-    <tr>
-      <td><label for="verboseLogging">Verbose Logging:</label></td>
-      <td>
-        <input type="checkbox" id="verboseLogging"
-               <?php echo (urldecode($pluginSettings['verboseLogging'] ?? '') === 'true') ? 'checked' : ''; ?>
-               onChange="SetPluginSetting('<?php echo $pluginName; ?>','verboseLogging',encodeURIComponent(this.checked ? 'true' : 'false'));" />
-        <span style="color: #666; font-size: 0.9em;">
-          Log every API call (noisy). Log file: <code>/home/fpp/media/logs/openfalcon-listener.log</code>
-        </span>
-      </td>
-    </tr>
-
-  </table>
-
-  <div style="margin-top: 1em; padding: 1em; background: #f5f5f5; border: 1px solid #ddd;">
-    <strong>After changing settings, restart the listener:</strong><br>
-    Use the command <em>"OpenFalcon — Restart Listener"</em> from the FPP command scheduler,
-    or restart FPP.
-  </div>
-
-  <div style="margin-top: 1em;">
-    <strong>Plugin Version:</strong>
-    <code><?php echo urldecode($pluginSettings['pluginVersion'] ?? 'unknown'); ?></code>
-  </div>
-</div>
