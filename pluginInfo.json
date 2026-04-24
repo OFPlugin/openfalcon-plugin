@@ -1,5 +1,5 @@
 {
-	"repoName": "openfalcon-plugin",
+	"repoName": "openfalcon",
 	"name": "OpenFalcon",
 	"author": "OpenFalcon Contributors",
 	"description": "Connects FPP to a self-hosted OpenFalcon server for viewer voting and jukebox control.",
