@@ -53,12 +53,33 @@ if (!empty(trim((string)$ps))) {
     --of-radius: 10px;
     --of-pill: 999px;
 
-    max-width: 1100px; margin: 0 auto; padding: 1.5rem 1.25rem;
+    /* Sit inside FPP's existing page chrome — no outer card framing.
+       FPP's main content area provides the page background and padding;
+       we just style the inner content. */
     color: var(--of-text);
-    background: var(--of-bg);
-    border-radius: var(--of-radius);
     font-family: 'Inter', system-ui, -apple-system, Segoe UI, sans-serif;
+  }
+
+  /* Elevated card that holds the form contents — like PulseMesh's panel */
+  .of-card {
+    background: var(--of-bg-elevated);
+    border: 1px solid var(--of-border);
+    border-radius: var(--of-radius);
+    padding: 1.5rem 1.75rem;
     box-shadow: var(--of-shadow);
+  }
+  .of-card-header { margin-bottom: 1.5rem; }
+  .of-card-header h1 {
+    margin: 0; font-size: 1.4rem; font-weight: 700; color: var(--of-text);
+    display: flex; align-items: baseline; gap: 0.5rem;
+  }
+  .of-card-subtitle {
+    margin-top: 0.3rem; font-size: 0.85rem; color: var(--of-text-muted);
+  }
+  .of-version {
+    background: var(--of-bg-input); padding: 0.1rem 0.5rem;
+    border-radius: var(--of-pill); border: 1px solid var(--of-border);
+    color: var(--of-text-dim); font-size: 0.78rem; font-weight: 500;
   }
   @media (prefers-color-scheme: light) {
     .of-page {
@@ -83,11 +104,6 @@ if (!empty(trim((string)$ps))) {
     }
   }
 
-  .of-page h1 { font-size: 1.6rem; font-weight: 700; margin: 0 0 1.5rem;
-                color: var(--of-text); display: flex; align-items: baseline; gap: 0.6rem; }
-  .of-page h1 .of-version { font-size: 0.8rem; color: var(--of-text-dim); font-weight: 400;
-                            background: var(--of-bg-elevated); padding: 0.15rem 0.5rem;
-                            border-radius: var(--of-pill); border: 1px solid var(--of-border); }
   .of-page h2 { font-size: 1.05rem; font-weight: 600; color: var(--of-accent);
                 margin: 2rem 0 0.5rem; text-align: center; letter-spacing: 0.02em; }
 
@@ -206,7 +222,12 @@ if (!empty(trim((string)$ps))) {
 </style>
 
 <div class="of-page">
-  <h1>OpenFalcon Plugin <span class="of-version">v<?php echo htmlspecialchars($pluginVersion); ?></span></h1>
+  <div class="of-card">
+
+  <div class="of-card-header">
+    <h1>OpenFalcon Plugin Configuration</h1>
+    <div class="of-card-subtitle">Manage your connection, playlist, and listener &middot; <span class="of-version">v<?php echo htmlspecialchars($pluginVersion); ?></span></div>
+  </div>
 
   <!-- ============================================ -->
   <!-- LISTENER STATUS BANNER                       -->
@@ -498,6 +519,8 @@ if (!empty(trim((string)$ps))) {
       </div>
     </div>
   </div>
+
+  </div><!-- /of-card -->
 
   <div class="of-page-footer">
     OpenFalcon &middot; <a href="https://github.com/frankietest6/openfalcon" target="_blank" rel="noopener">Server</a> &middot;
