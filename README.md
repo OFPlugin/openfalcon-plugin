@@ -1,6 +1,6 @@
 # OpenFalcon FPP Plugin
 
-The Falcon Player (FPP) plugin for [OpenFalcon](https://github.com/frankietest6/openfalcon) — a self-hosted replacement for Remote Falcon.
+The Falcon Player (FPP) plugin for [OpenFalcon](https://github.com/OFPlugin/openfalcon) — a self-hosted replacement for Remote Falcon.
 
 This plugin connects an FPP instance to your OpenFalcon server. It reports playback state to OpenFalcon and queues sequences when viewers vote or make jukebox requests.
 
@@ -16,7 +16,7 @@ This plugin connects an FPP instance to your OpenFalcon server. It reports playb
 ## Requirements
 
 - FPP 5.0 or newer (tested on FPP 9.5)
-- A running [OpenFalcon](https://github.com/frankietest6/openfalcon) server reachable from the FPP
+- A running [OpenFalcon](https://github.com/OFPlugin/openfalcon) server reachable from the FPP
 
 ## Install
 
@@ -29,7 +29,7 @@ This plugin connects an FPP instance to your OpenFalcon server. It reports playb
 ```bash
 # On the FPP, in a terminal:
 cd /home/fpp/media/plugins
-git clone https://github.com/frankietest6/openfalcon-plugin.git openfalcon
+git clone https://github.com/OFPlugin/openfalcon-plugin.git openfalcon
 sudo chmod +x openfalcon/scripts/*.sh openfalcon/commands/*.php
 sudo chown -R fpp:fpp openfalcon
 sudo reboot

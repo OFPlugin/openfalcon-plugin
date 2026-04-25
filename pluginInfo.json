@@ -3,9 +3,9 @@
 	"name": "OpenFalcon",
 	"author": "OpenFalcon Contributors",
 	"description": "Connects FPP to a self-hosted OpenFalcon server for viewer voting and jukebox control.",
-	"homeURL": "https://github.com/frankietest6/openfalcon-plugin",
-	"srcURL": "https://github.com/frankietest6/openfalcon-plugin.git",
-	"bugURL": "https://github.com/frankietest6/openfalcon-plugin/issues",
+	"homeURL": "https://github.com/OFPlugin/openfalcon-plugin",
+	"srcURL": "https://github.com/OFPlugin/openfalcon-plugin.git",
+	"bugURL": "https://github.com/OFPlugin/openfalcon-plugin/issues",
 	"allowUpdates": 1,
 	"versions": [
 		{
