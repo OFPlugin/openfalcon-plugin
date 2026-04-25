@@ -161,8 +161,12 @@ function ofGetState() {
 }
 
 // Tell OpenFalcon what's currently playing
-function ofReportPlaying($sequenceName) {
-    return ofHttp('POST', '/api/plugin/playing', array('sequence' => $sequenceName));
+function ofReportPlaying($sequenceName, $secondsPlayed = null) {
+    $payload = array('sequence' => $sequenceName);
+    if ($secondsPlayed !== null) {
+        $payload['seconds_played'] = $secondsPlayed;
+    }
+    return ofHttp('POST', '/api/plugin/playing', $payload);
 }
 
 // Tell OpenFalcon what's scheduled next
@@ -415,7 +419,13 @@ while (true) {
     // Only report changes
     if ($currentlyPlaying !== '' && $currentlyPlaying !== $lastPlayingReported) {
         logEntry("Now playing: $currentlyPlaying");
-        ofReportPlaying($currentlyPlaying);
+        // Pull current playback position from FPP status — used by the server to
+        // compute correct started_at when a sequence is resumed mid-track (e.g.
+        // after a request interrupt). FPP exposes seconds_played as a float.
+        $secondsPlayed = isset($fppStatus->seconds_played)
+            ? floatval($fppStatus->seconds_played)
+            : null;
+        ofReportPlaying($currentlyPlaying, $secondsPlayed);
         $lastPlayingReported = $currentlyPlaying;
 
         // When a new sequence starts playing, clean up our queue tracking.
