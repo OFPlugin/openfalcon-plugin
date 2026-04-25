@@ -7,7 +7,7 @@ $pluginName = "openfalcon";
 $pluginConfigFile = $settings['configDirectory'] . "/plugin." . $pluginName;
 $pluginSettings = @parse_ini_file($pluginConfigFile) ?: array();
 
-$pluginVersion = "0.7.10";
+$pluginVersion = "0.7.11";
 
 // Helper for safe display of saved values
 function val($settings, $key, $default = '') {
@@ -94,8 +94,10 @@ if (!empty(trim((string)$ps))) {
     border-radius: var(--of-pill); border: 1px solid var(--of-border);
     color: var(--of-text-dim); font-size: 0.78rem; font-weight: 500;
   }
-  @media (prefers-color-scheme: light) {
-    .of-page {
+  /* Light theme — applied via .theme-light class on .of-page (toggleable),
+     with prefers-color-scheme auto-fallback for users who never toggle. */
+  .of-page.theme-light,
+  .of-page.theme-auto-light {
       --of-bg: #f5f7fb;
       --of-bg-elevated: #ffffff;
       --of-bg-input: #ffffff;
@@ -114,7 +116,20 @@ if (!empty(trim((string)$ps))) {
       --of-danger-border: rgba(220,38,38,0.30);
       --of-link: #2563eb;
       --of-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
-    }
+  }
+
+  /* Theme toggle button — top-right of card header, like admin */
+  .of-card-header { position: relative; }
+  .of-theme-toggle {
+    position: absolute; top: 0; right: 0;
+    background: transparent; border: 1px solid var(--of-border);
+    color: var(--of-text-muted); padding: 0.35rem 0.6rem;
+    border-radius: var(--of-pill); font-size: 0.95rem;
+    cursor: pointer; line-height: 1; transition: all 0.15s;
+  }
+  .of-theme-toggle:hover {
+    color: var(--of-text); border-color: var(--of-border-hover);
+    background: var(--of-bg-input);
   }
 
   .of-page h2 { font-size: 1.05rem; font-weight: 600; color: var(--of-accent);
@@ -238,6 +253,7 @@ if (!empty(trim((string)$ps))) {
   <div class="of-card">
 
   <div class="of-card-header">
+    <button type="button" class="of-theme-toggle" id="ofThemeToggle" onclick="toggleOfTheme()" title="Toggle light/dark">◐</button>
     <a href="/" class="of-back-link" title="Return to FPP main page">&larr; Back to FPP</a>
     <h1>OpenFalcon Plugin Configuration</h1>
     <div class="of-card-subtitle">Manage your connection, playlist, and listener &middot; <span class="of-version">v<?php echo htmlspecialchars($pluginVersion); ?></span></div>
@@ -543,6 +559,39 @@ if (!empty(trim((string)$ps))) {
 </div>
 
 <script type="text/javascript">
+  // ============================================================
+  // Theme toggle (persists in localStorage; falls back to OS preference)
+  // ============================================================
+  function applyOfTheme(theme) {
+    const page = document.querySelector('.of-page');
+    if (!page) return;
+    page.classList.remove('theme-light', 'theme-auto-light');
+    if (theme === 'light') page.classList.add('theme-light');
+    const btn = document.getElementById('ofThemeToggle');
+    if (btn) btn.textContent = theme === 'light' ? '☀' : '◐';
+  }
+  function toggleOfTheme() {
+    const current = localStorage.getItem('openfalcon_plugin_theme') || 'dark';
+    const next = current === 'dark' ? 'light' : 'dark';
+    localStorage.setItem('openfalcon_plugin_theme', next);
+    applyOfTheme(next);
+  }
+  (function initOfTheme() {
+    const saved = localStorage.getItem('openfalcon_plugin_theme');
+    if (saved === 'light') {
+      applyOfTheme('light');
+    } else if (saved === 'dark') {
+      applyOfTheme('dark');
+    } else {
+      // No manual choice — defer to OS preference
+      const prefersLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+      if (prefersLight) {
+        const page = document.querySelector('.of-page');
+        if (page) page.classList.add('theme-auto-light');
+      }
+    }
+  })();
+
   // ============================================================
   // FPP setting save (REST API)
   // ============================================================
