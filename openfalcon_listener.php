@@ -340,6 +340,9 @@ $lastQueuedForSequence = "";
 $lastQueuedAt = 0;
 $lastInsertedSequence = "";   // Name of last sequence we inserted via Immediate;
                               // used to detect "viewer request currently playing"
+$lastImmediateAt = 0;         // Timestamp of last Immediate insert. We treat the
+                              // ~5 seconds after as "request still settling" so
+                              // rapid follow-up requests queue, not clobber.
 $lastHeartbeat = 0;
 $sequencesClearedWhenIdle = false;
 
@@ -392,6 +395,7 @@ while (true) {
             $lastPlayingReported = '';
             $lastNextReported = '';
             $lastInsertedSequence = '';
+            $lastImmediateAt = 0;
             $sequencesClearedWhenIdle = true;
             logEntry_verbose("FPP idle. Cleared sequences on server.");
         }
@@ -456,23 +460,27 @@ while (true) {
             }
 
             if ($nextSeq !== null && $nextIdx !== null) {
-                // If interrupt-mode is on but the currently-playing sequence is one
-                // we inserted (i.e. a viewer request is already playing), QUEUE the
-                // new request via "After Current" instead of clobbering it. The
-                // schedule's main playlist is still interrupted (which is what
-                // interrupt-mode is for), but viewer requests don't interrupt each
-                // other.
+                // We avoid clobbering a viewer request that's already playing or
+                // just-inserted (FPP may not have started reporting it yet). Two
+                // checks together close the race:
+                //   (a) currently-playing matches the last sequence we inserted, OR
+                //   (b) we did an Immediate insert in the last 5 seconds
+                $within_cooldown = ($lastImmediateAt > 0 && (time() - $lastImmediateAt) < 5);
                 $isViewerRequestPlaying = ($lastInsertedSequence !== ""
                     && $currentlyPlaying === $lastInsertedSequence);
+                $shouldQueue = $within_cooldown || $isViewerRequestPlaying;
 
-                if ($cfg['interruptSchedule'] && !$isViewerRequestPlaying) {
+                if ($cfg['interruptSchedule'] && !$shouldQueue) {
                     logEntry("Interrupting schedule with: $nextSeq at playlist index $nextIdx");
                     insertPlaylistImmediate($cfg['remotePlaylist'], $nextIdx);
                     $lastInsertedSequence = $nextSeq;
+                    $lastImmediateAt = time();
                 } else {
-                    $reason = $cfg['interruptSchedule']
-                        ? "viewer request already playing"
-                        : "non-interrupt mode";
+                    $reason = !$cfg['interruptSchedule']
+                        ? "non-interrupt mode"
+                        : ($isViewerRequestPlaying
+                            ? "viewer request already playing"
+                            : "cooldown after recent insert");
                     logEntry("Queueing after current ($reason): $nextSeq at playlist index $nextIdx");
                     insertPlaylistAfterCurrent($cfg['remotePlaylist'], $nextIdx);
                     $lastInsertedSequence = $nextSeq;
