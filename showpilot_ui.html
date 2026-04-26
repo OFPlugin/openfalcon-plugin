@@ -56,9 +56,17 @@ if (!empty(trim((string)$ps))) {
     --of-radius: 10px;
     --of-pill: 999px;
 
-    /* Sit inside FPP's existing page chrome — no outer card framing.
-       FPP's main content area provides the page background and padding;
-       we just style the inner content. */
+    /* Fill the viewport vertically with the theme's page background.
+       FPP's body is always white — without this, when we're in dark
+       mode the white shines through below the card wherever our
+       content doesn't reach. Using the theme's --of-bg means:
+       - Dark mode: dark navy fills below
+       - Light mode: near-white (matches FPP body, seamless)
+       Horizontal padding is already handled by FPP. */
+    background: var(--of-bg);
+    min-height: 100vh;
+    box-sizing: border-box;
+
     color: var(--of-text);
     font-family: 'Inter', system-ui, -apple-system, Segoe UI, sans-serif;
   }
