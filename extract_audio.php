@@ -2,33 +2,35 @@
 // ============================================================
 // ShowPilot — extract_audio.php
 // ============================================================
-// Demuxes the audio track from a video file in FPP's music dir and
-// streams it back as M4A (AAC in MP4 container). Used by the plugin
-// browser UI when syncing video sequences (.mp4/.mov/.mkv/etc.) — we
-// don't want to upload the full video bytes to ShowPilot when only
-// the audio is needed for viewer playback.
+// Extracts the audio track from a video file in FPP's music or videos
+// directory and returns it as MP3. Used by the plugin browser UI when
+// syncing video sequences (.mp4/.mov/.mkv/etc.) — we don't want to
+// upload the full video bytes to ShowPilot when only the audio is
+// needed for viewer playback.
 //
-// Why M4A instead of MP3?
-//   - Video files in FPP shows almost always have AAC audio. Demuxing
-//     into M4A is a stream copy (no re-encoding) — fast (sub-second
-//     per file on a Pi) and lossless.
-//   - Re-encoding to MP3 would add 3-8 seconds of CPU per file AND
-//     introduce a second lossy encoding pass. Worse on every metric.
-//   - Modern browsers all support AAC playback via Web Audio API.
+// Why MP3?
+//   - Plays reliably in every browser (Chrome, Safari, Firefox, mobile).
+//     Decoders accept MP3 from any source format without container
+//     edge-cases.
+//   - We tried M4A (AAC stream-copy) first — faster, no quality loss —
+//     but found some browser/codec/container combinations that fail
+//     to decode the resulting MP4 even with faststart muxing. The
+//     symptom was duration loading correctly but playback failing.
+//   - Pi CPU cost (~5-10 seconds per video file per sync) is one-time-
+//     per-extraction. Sync is a manual user action; users don't notice.
 //
 // Why on-demand instead of pre-extracted?
-//   - No temp file management, no cache invalidation when source MP4s
-//     change, no extra disk usage on the SD card.
-//   - The plugin only requests this when actually syncing, which is
-//     a manual user action.
+//   - No temp file management, no cache invalidation when source files
+//     change, no extra persistent disk usage on the SD card.
+//   - The plugin only requests this when actually syncing.
 //
 // Inputs (query string):
 //   file       — mediaName of the video file (e.g. "intro.mp4")
 //
 // Output:
-//   200 with audio/mp4 body on success
+//   200 with audio/mpeg body on success
 //   400 if file param missing or path invalid
-//   404 if file doesn't exist or has no audio
+//   404 if file doesn't exist
 //   500 on ffmpeg failure
 // ============================================================
 
@@ -111,96 +113,80 @@ if ($ffmpeg === null) {
     exit;
 }
 
-// Build the ffmpeg command. Streaming output to stdout via `-` lets us
-// pipe the audio directly into the HTTP response without a temp file.
+// Build the ffmpeg command. Use a temp file (NOT stdout streaming) so
+// we can produce a STANDARD MP4 with the moov atom at the front. This
+// is critical for browser playback:
+//   - decodeAudioData() needs the full moov index to parse the file.
+//   - Fragmented MP4 (which streaming-via-stdout requires) is decodable
+//     by some browsers but not reliably across Chrome/Safari/Firefox.
+//   - faststart writes moov at the front, so playback can start without
+//     reading the whole file. This is the standard "web-compatible MP4"
+//     pattern used by every major video host.
+//
+// The cost of using a temp file: ~1MB of /tmp space briefly per
+// extraction. Negligible on any FPP install.
 //
 // Flags rationale:
+//   -y                   overwrite output (no interactive prompt)
 //   -i <input>           input file
 //   -vn                  drop video stream
-//   -acodec copy         stream-copy audio (no re-encoding)
-//   -map_metadata -1     strip all metadata for hash stability — same
-//                        input file always produces same output bytes
-//   -f ipod              "iPod" muxer = MP4 container with audio only,
-//                        commonly recognized as M4A. Required when
-//                        outputting to a non-seekable destination
-//                        (stdout) since MP4 normally needs to seek
-//                        back to write the moov atom. The ipod muxer
-//                        + frag flag arranges for a fragmented MP4
-//                        that's stream-friendly.
-//   -movflags +frag_keyframe+empty_moov
-//                        write fragmented MP4 so headers can come
-//                        before the body — required for streaming.
-//   pipe:1               stdout
-//   2>/dev/null          discard stderr, we don't need ffmpeg's banner
-//                        in the response body
+//   -acodec copy         stream-copy audio (no re-encoding) — fast
+//   -map_metadata -1     strip all metadata for hash stability
+//   -movflags +faststart move moov atom to start of file for fast
+//                        playback start AND reliable decoding
+//   <output>             temp file path
 //
-// We use proc_open instead of shell_exec so we can stream the output
-// chunk-by-chunk to the HTTP response as ffmpeg produces it. shell_exec
-// would buffer the entire output in PHP memory, which on a Pi with a
-// large input file could cause OOM.
+// We do NOT use proc_open + streaming here because:
+//   (a) The output goes to a regular file, not a pipe, so we don't need
+//       chunked output handling.
+//   (b) After ffmpeg exits, we readfile() the result in one go — PHP's
+//       readfile is memory-efficient (chunks internally) so even a
+//       large M4A doesn't OOM.
+$tmpFile = tempnam(sys_get_temp_dir(), 'sp-extract-') . '.mp3';
 $cmd = sprintf(
-    '%s -hide_banner -loglevel error -i %s -vn -acodec copy -map_metadata -1 ' .
-    '-movflags +frag_keyframe+empty_moov -f ipod pipe:1 2>/dev/null',
+    '%s -y -hide_banner -loglevel error -i %s -vn ' .
+    '-ar 44100 -ac 2 -b:a 192k -map_metadata -1 -f mp3 %s 2>&1',
     escapeshellcmd($ffmpeg),
-    escapeshellarg($srcPath)
+    escapeshellarg($srcPath),
+    escapeshellarg($tmpFile)
 );
 
-$descriptors = array(
-    0 => array('pipe', 'r'),  // stdin (unused, but required)
-    1 => array('pipe', 'w'),  // stdout
-    2 => array('pipe', 'w'),  // stderr (we redirect to /dev/null in cmd, but this is here for safety)
-);
+// Run ffmpeg synchronously and capture output. exec() returns its
+// stdout/stderr line array which is useful for error logging when
+// extraction fails.
+$ffmpegOutput = array();
+$exitCode = 0;
+exec($cmd, $ffmpegOutput, $exitCode);
 
-$proc = @proc_open($cmd, $descriptors, $pipes);
-if (!is_resource($proc)) {
+if ($exitCode !== 0 || !file_exists($tmpFile) || filesize($tmpFile) === 0) {
     http_response_code(500);
     header('Content-Type: text/plain');
-    echo "failed to spawn ffmpeg";
-    elog("proc_open failed for: $rawFile");
+    $errMsg = "ffmpeg exit $exitCode";
+    if (!empty($ffmpegOutput)) {
+        $errMsg .= ': ' . implode(' | ', array_slice($ffmpegOutput, 0, 3));
+    }
+    echo $errMsg;
+    elog("ffmpeg failed for $rawFile: $errMsg");
+    @unlink($tmpFile);
     exit;
 }
-fclose($pipes[0]); // close stdin
 
-// Stream the output. Use stream_set_blocking(false) on stdout so we
-// can fall through to the loop and react to ffmpeg exiting.
-stream_set_blocking($pipes[1], true);
-
-// Now that we know we can run ffmpeg, send headers. Don't send Content-
-// Length because we don't know the output size up front (streaming).
-// Browsers handle chunked transfer encoding for fetch() responses fine.
-header('Content-Type: audio/mp4');
+// Send headers, then stream the file out. readfile is memory-friendly
+// (it chunks internally), so even a 50MB M4A doesn't OOM on a Pi.
+header('Content-Type: audio/mpeg');
+header('Content-Length: ' . filesize($tmpFile));
 header('Cache-Control: no-store');
 header('X-Content-Type-Options: nosniff');
 
-// Disable PHP output buffering so bytes go to the network as ffmpeg
-// produces them. Without this, PHP collects the entire output before
-// flushing — defeats the streaming.
+// Disable PHP output buffering so bytes flow straight to the client.
 while (ob_get_level() > 0) ob_end_clean();
 
-$totalBytes = 0;
-while (!feof($pipes[1])) {
-    $chunk = fread($pipes[1], 65536);
-    if ($chunk === false || $chunk === '') {
-        // ffmpeg may have just closed the pipe — break and check exit code.
-        break;
-    }
-    echo $chunk;
-    $totalBytes += strlen($chunk);
-    // Flush PHP's internal output buffer so the bytes hit Apache, then
-    // Apache pushes them to the client. flush() is no-op for buffer-
-    // less PHP but harmless.
-    flush();
-}
-fclose($pipes[1]);
-fclose($pipes[2]);
+$totalBytes = readfile($tmpFile);
+@unlink($tmpFile);
 
-$exitCode = proc_close($proc);
-if ($exitCode !== 0) {
-    elog("ffmpeg exit $exitCode for: $rawFile (sent $totalBytes bytes)");
-    // Headers already sent — can't change status code now. The truncated
-    // response will fail to decode on the client side, which will surface
-    // as an upload error in the plugin UI. That's acceptable; the user
-    // sees something went wrong.
+if ($totalBytes === false || $totalBytes === 0) {
+    elog("readfile failed for $rawFile (tmp: $tmpFile)");
 } else {
     elog("extracted $totalBytes bytes from: $rawFile");
 }
+
