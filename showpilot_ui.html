@@ -31,6 +31,22 @@ if (!empty(trim((string)$ps))) {
      Scoped to .of-page so we don't fight FPP's own styles.
      Tracks light/dark via prefers-color-scheme.
      ============================================================ */
+  /* Paint the FPP body background to match our theme. Without this,
+     FPP's white body shows through above and below our .of-page (and
+     occasionally on the sides) — the full-bleed trick on .of-page
+     itself only handles areas inside the viewport, not FPP's chrome
+     padding around its content area. Setting body bg directly is the
+     simplest way to make every visible white area disappear.
+     Scoped to when our .of-page is on the page so we don't affect
+     other FPP screens. */
+  body:has(.of-page:not(.theme-light):not(.theme-auto-light)) {
+    background: #0a1428 !important;
+  }
+  body:has(.of-page.theme-light),
+  body:has(.of-page.theme-auto-light) {
+    background: #f5f7fb !important;
+  }
+
   .of-page {
     /* Default: dark Stage Lights */
     --of-bg: #0a1428;
@@ -56,22 +72,11 @@ if (!empty(trim((string)$ps))) {
     --of-radius: 10px;
     --of-pill: 999px;
 
-    /* Fill the viewport vertically AND horizontally with the theme's
-       page background. FPP's body has padding around its content area,
-       so without breaking out we leave thin strips of FPP's white
-       visible at the edges. The viewport-width trick (100vw + negative
-       margin = half the difference) extends our background to the full
-       viewport width regardless of FPP's container padding, while
-       internal padding keeps our content laid out properly. */
+    /* Body background is painted directly (see above) to cover all
+       FPP chrome padding. We just need to set ourselves up with normal
+       padding so the card sits comfortably in the content area. */
     background: var(--of-bg);
     min-height: 100vh;
-    width: 100vw;
-    position: relative;
-    left: 50%;
-    right: 50%;
-    margin-left: -50vw;
-    margin-right: -50vw;
-    padding: 1.5rem 2rem;
     box-sizing: border-box;
 
     color: var(--of-text);
@@ -691,6 +696,25 @@ if (!empty(trim((string)$ps))) {
   // than a <title> tag because FPP injects this file mid-page; a <title>
   // tag wouldn't reach the document head.
   document.title = 'ShowPilot Plugin · FPP';
+
+  // Paint FPP's body background to match our theme. The CSS uses :has()
+  // for this too, but :has() is only ~3 years old; older browsers will
+  // miss it. JS fallback is defense-in-depth. Re-applies whenever theme
+  // changes since light/dark have different backgrounds.
+  function paintBodyBackground() {
+    const page = document.querySelector('.of-page');
+    if (!page) return;
+    const isLight = page.classList.contains('theme-light')
+                 || page.classList.contains('theme-auto-light');
+    document.body.style.background = isLight ? '#f5f7fb' : '#0a1428';
+  }
+  paintBodyBackground();
+  // Wrap applyOfTheme so any theme change triggers a repaint
+  const _origApplyOfTheme = applyOfTheme;
+  applyOfTheme = function(theme) {
+    _origApplyOfTheme(theme);
+    paintBodyBackground();
+  };
 
   // ============================================================
   // FPP setting save (REST API)
