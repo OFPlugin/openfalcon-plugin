@@ -310,8 +310,14 @@ if (!empty(trim((string)$ps))) {
     <h2>Server Connection</h2>
   </div>
 
-  <div class="of-help warn" style="margin: 0 0 1rem; padding: 0.6rem 0.85rem; border-left: 3px solid var(--of-accent); background: rgba(248, 123, 2, 0.08); border-radius: 4px;">
-    <strong>Heads up:</strong> Changes to <em>Server URL</em> or <em>Show Token</em> only take effect after the listener restarts. Click <em>Restart Listener</em> at the bottom of this page (or use the FPP "Restart fppd" button) after saving.
+  <div class="of-help warn" style="margin: 0 0 1rem; padding: 0.75rem 0.85rem; border-left: 3px solid var(--of-accent); background: rgba(248, 123, 2, 0.08); border-radius: 4px; display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; justify-content: space-between;">
+    <div style="flex: 1; min-width: 280px;">
+      <strong>Heads up:</strong> Changes to <em>Server URL</em> or <em>Show Token</em> only take effect after the listener restarts.
+    </div>
+    <div style="display: flex; align-items: center; gap: 0.5rem;">
+      <button type="button" class="of-btn of-btn-primary" onclick="restartListener();" style="white-space: nowrap;">Restart Listener</button>
+      <span id="restartStatusServer" class="of-status muted"></span>
+    </div>
   </div>
 
   <div class="of-row">
@@ -914,16 +920,23 @@ if (!empty(trim((string)$ps))) {
   setInterval(refreshListenerBanner, 4000);
 
   async function restartListener() {
+    // Write status to both possible UI locations: the Listener tab (where
+    // the original button lives) and the Server tab callout (where the
+    // inline button lives in v0.8.7+). setStatus() no-ops on missing IDs,
+    // so this is safe regardless of which tab the user is on.
     setStatus('restartStatus', 'Restarting…', 'muted');
+    setStatus('restartStatusServer', 'Restarting…', 'muted');
     try {
       await runFppCommand('ShowPilot - Restart Listener');
       // Give fppd a moment to actually start the new process
       setTimeout(async () => {
         await refreshListenerBanner();
         setStatus('restartStatus', '✓ Listener restarted', 'success');
+        setStatus('restartStatusServer', '✓ Listener restarted', 'success');
       }, 1500);
     } catch (err) {
       setStatus('restartStatus', '✗ ' + err.message, 'error');
+      setStatus('restartStatusServer', '✗ ' + err.message, 'error');
     }
   }
 
