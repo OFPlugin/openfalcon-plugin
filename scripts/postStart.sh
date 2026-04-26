@@ -1,32 +1,49 @@
 #!/bin/bash
 # ShowPilot plugin postStart — runs every time fppd starts.
 #
-# Kills any existing listener defensively before spawning a fresh one. This
-# matters because:
-#   1. If a user updated the plugin and clicked "Restart" in FPP UI, fppd
-#      cycles. postStop should kill the old listener, but if anything went
-#      wrong (postStop got skipped, kill signal lost, weird exit state), a
-#      stale listener could survive into postStart. The pkill below catches it.
-#   2. If postStart somehow gets called twice (shouldn't, but FPP edge cases
-#      exist), the second call won't spawn a duplicate listener.
+# This script is the single source of truth for getting the listener into a
+# correct state. It does THREE things on every fppd cycle:
 #
-# After the kill+spawn, exactly one fresh listener exists, running the
-# current code on disk.
+#   1. Self-heals file permissions. Plugin files arrive from `git clone` /
+#      `git pull` without executable bits in some environments (Windows clones
+#      uploaded later, manual extracts, restored backups). Without exec bits,
+#      fppd cannot exec our command-button scripts ("Restart Listener", etc.)
+#      and they fail silently. We chmod every cycle so this can never bite the
+#      user, regardless of how the files arrived.
+#
+#   2. Kills any existing listener. Even though postStop should handle this,
+#      there are edge cases where a stale listener survives (postStop got
+#      skipped, kill signal lost, fppd hard-restarted). pkill catches them.
+#
+#   3. Spawns one fresh listener with the current code on disk.
+#
+# This sequence guarantees: after fppd restart, exactly one v-current listener
+# is running, all command buttons work, and no manual intervention is needed.
 
 PLUGIN_DIR="/home/fpp/media/plugins/showpilot"
 LOG_DIR="/home/fpp/media/logs"
 mkdir -p "$LOG_DIR"
 
-# Kill any existing listener (idempotent — exit 0 if killed, 1 if none found,
-# both fine here).
+# 1. Self-heal permissions — make all command and script files executable.
+# Failures are silenced because we may not own every file (rare but possible),
+# and the postStart should not block on permission edge cases.
+chmod +x "$PLUGIN_DIR/commands/"*.php 2>/dev/null
+chmod +x "$PLUGIN_DIR/scripts/"*.sh 2>/dev/null
+chmod +x "$PLUGIN_DIR/showpilot_listener.php" 2>/dev/null
+chmod +x "$PLUGIN_DIR/listener_status.php" 2>/dev/null
+
+# 2. Kill any existing listener. Idempotent — exit 0 if killed, 1 if none
+# found. Both fine here.
 pkill -f "php $PLUGIN_DIR/showpilot_listener.php" 2>/dev/null
 
 # Brief pause so SIGTERM takes effect cleanly before we spawn the replacement.
 sleep 1
 
-# Spawn the listener detached. setsid prevents fppd from holding onto it as a
-# child process; redirecting stdio to /dev/null ensures the listener doesn't
-# inherit the controlling terminal or wait on any descriptors.
+# 3. Spawn the listener detached. We invoke PHP explicitly with /usr/bin/php
+# rather than relying on the shebang line — this means the listener works
+# even if its exec bit somehow ends up unset.
+# setsid prevents fppd from holding onto it as a child process; redirecting
+# stdio to /dev/null ensures the listener doesn't inherit any descriptors.
 setsid /usr/bin/php "$PLUGIN_DIR/showpilot_listener.php" \
     </dev/null >/dev/null 2>&1 &
 
