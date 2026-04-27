@@ -22,7 +22,7 @@ This plugin connects an FPP instance to your ShowPilot server. It reports playba
 
 ### Via FPP Plugin Manager (recommended once it's in the master plugin list)
 
-**Pending** — once this plugin is added to the [FalconChristmas plugin list](https://github.com/FalconChristmas/fpp-pluginList) you'll be able to install with one click. For now, install manually.
+**Pending** — once this plugin is added to the [FalconChristmas plugin list](https://github.com/FalconChristmas/fpp-data) you'll be able to install with one click. For now, install manually.
 
 ### Manual install
 
