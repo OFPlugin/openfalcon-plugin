@@ -1077,7 +1077,8 @@ if (!empty(trim((string)$ps))) {
   async function pluginSettingPersisted(key, value) {
     try {
       const savedConfig = await fetchPluginConfigText();
-      return parsePluginConfigValue(savedConfig, key) === encodePluginConfigValue(value);
+      const savedValue = parsePluginConfigValue(savedConfig, key);
+      return savedValue === value || savedValue === encodePluginConfigValue(value);
     } catch (err) {
       console.warn('Could not verify plugin setting save:', err);
       return false;
