@@ -1032,17 +1032,78 @@ if (!empty(trim((string)$ps))) {
   // ============================================================
   // FPP setting save
   // ============================================================
+  function encodePluginConfigValue(value) {
+    return encodeURIComponent(value);
+  }
+
+  function updatePluginConfigText(content, key, value) {
+    const encodedValue = encodePluginConfigValue(value);
+    const line = key + ' = "' + encodedValue + '"';
+    const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('^\\s*' + escapedKey + '\\s*=.*$', 'm');
+    if (re.test(content)) {
+      return content.replace(re, line);
+    }
+    return content.replace(/\s*$/, '') + '\n' + line + '\n';
+  }
+
+  function parsePluginConfigValue(content, key) {
+    const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('^\\s*' + escapedKey + '\\s*=\\s*(.*)$', 'm');
+    const match = content.match(re);
+    if (!match) return null;
+    return match[1].trim().replace(/^"(.*)"$/, '$1');
+  }
+
+  async function fetchPluginConfigText() {
+    let res = await fetch('/api/configfile/plugin.showpilot', { cache: 'no-store' });
+    if (res.ok) return await res.text();
+
+    res = await fetch('/plugin.php?_menu=content&plugin=showpilot&page=showpilot_config.php&nopage=1&action=raw', { cache: 'no-store' });
+    if (res.ok) return await res.text();
+
+    throw new Error('Unable to load plugin config');
+  }
+
+  async function savePluginConfigText(content) {
+    return await fetch('/api/configfile/plugin.showpilot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/html' },
+      body: content,
+    });
+  }
+
+  async function savePluginSettingViaConfigFile(key, value) {
+    const nextConfig = updatePluginConfigText(await fetchPluginConfigText(), key, value);
+    const saveRes = await savePluginConfigText(nextConfig);
+    if (!saveRes.ok) {
+      throw new Error('Config file save failed: HTTP ' + saveRes.status);
+    }
+
+    const savedConfig = await fetchPluginConfigText();
+    if (parsePluginConfigValue(savedConfig, key) !== encodePluginConfigValue(value)) {
+      throw new Error('Config file save did not persist');
+    }
+  }
+
   async function SetPluginSetting(plugin, key, value) {
     const rawValue = decodeURIComponent(value);
     try {
-      const res = await fetch('/plugin.php?_menu=content&plugin=' + encodeURIComponent(plugin) + '&page=showpilot_config.php&nopage=1', {
+      const res = await fetch('/api/plugin/' + encodeURIComponent(plugin) + '/settings/' + encodeURIComponent(key), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ key, value: rawValue }),
+        headers: { 'Content-Type': 'text/plain' },
+        body: rawValue,
       });
-      if (!res.ok) console.error('Save failed:', res.status, await res.text());
+      if (res.ok) return;
+
+      console.warn('FPP settings API save failed, falling back to configfile:', res.status, await res.text());
+      await savePluginSettingViaConfigFile(key, rawValue);
     } catch (err) {
-      console.error('Save error:', err);
+      try {
+        await savePluginSettingViaConfigFile(key, rawValue);
+      } catch (fallbackErr) {
+        console.error('Save error:', fallbackErr);
+      }
     }
   }
 
@@ -1636,12 +1697,7 @@ if (!empty(trim((string)$ps))) {
   async function loadRawConfig() {
     const out = document.getElementById('rawConfig');
     try {
-      const res = await fetch('/plugin.php?_menu=content&plugin=showpilot&page=showpilot_config.php&nopage=1&action=raw');
-      if (!res.ok) {
-        setStatus('rawConfigStatus', 'Load failed: HTTP ' + res.status, 'error');
-        return;
-      }
-      out.value = await res.text();
+      out.value = await fetchPluginConfigText();
       setStatus('rawConfigStatus', 'Loaded.', 'success');
     } catch (err) {
       setStatus('rawConfigStatus', 'Load failed: ' + err.message, 'error');
@@ -1656,13 +1712,7 @@ if (!empty(trim((string)$ps))) {
     }
     if (!confirm('Save this config and overwrite the current one?')) return;
     try {
-      // Use the plugin-local bridge here too, so raw config edits follow
-      // the same save path as the normal fields on every supported FPP.
-      const res = await fetch('/plugin.php?_menu=content&plugin=showpilot&page=showpilot_config.php&nopage=1&action=raw', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ content }),
-      });
+      const res = await savePluginConfigText(content);
       if (res.ok) {
         setStatus('rawConfigStatus', '✓ Saved. Restart listener for changes to take effect.', 'success');
       } else {
