@@ -712,7 +712,7 @@ if (!empty(trim((string)$ps))) {
         </div>
         <div class="of-control">
           <div class="of-btn-group">
-            <button type="button" class="of-btn of-btn-primary" onclick="syncPlaylist();">Sync Now</button>
+            <button type="button" class="of-btn of-btn-primary" id="syncNowBtn" onclick="syncPlaylist();">Sync Now</button>
             <span id="syncStatus" class="of-status muted"></span>
           </div>
           <label
@@ -1078,12 +1078,15 @@ if (!empty(trim((string)$ps))) {
 
   async function syncPlaylist() {
     const playlist = document.getElementById('remotePlaylist').value;
+    const syncBtn = document.getElementById('syncNowBtn');
 
     if (!playlist) {
       setStatus('syncStatus', 'Select a Remote Playlist first', 'error');
       return;
     }
 
+    syncBtn.disabled = true;
+    syncBtn.textContent = 'Syncing…';
     setStatus('syncStatus', 'Loading playlist from FPP…', 'muted');
 
     try {
@@ -1210,6 +1213,9 @@ if (!empty(trim((string)$ps))) {
     } catch (err) {
       setStatus('syncStatus', 'Sync failed: ' + err.message, 'error');
       console.error(err);
+    } finally {
+      syncBtn.disabled = false;
+      syncBtn.textContent = 'Sync Now';
     }
   }
 
