@@ -48,6 +48,11 @@ setsid /usr/bin/php "$PLUGIN_DIR/showpilot_listener.php" \
 if command -v node >/dev/null 2>&1; then
     NODE_MAJOR=$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)
     if [ "${NODE_MAJOR:-0}" -ge 18 ]; then
+        # Ensure ws module is installed — required for WebSocket position broadcast
+        if [ ! -d "$PLUGIN_DIR/node_modules/ws" ]; then
+            echo "Installing ws npm module..."
+            cd "$PLUGIN_DIR" && npm install ws --save 2>/dev/null || true
+        fi
         AUDIO_PORT=$(grep -E '^audioDaemonPort' "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2)
         : "${AUDIO_PORT:=8090}"
         PORT="$AUDIO_PORT" \
