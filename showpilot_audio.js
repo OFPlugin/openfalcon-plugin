@@ -129,7 +129,7 @@ function mimeForFile(filename) {
 // every 62ms — smooth and continuous, no 500ms gaps that trigger stall.
 // For 320kbps files we send ~2.5KB every 62ms.
 
-const CHUNK_BYTES = 16384; // 16KB chunks
+const CHUNK_BYTES = 4096; // 4KB — small enough for smooth pacing, triggers canplay quickly
 
 function streamFile(filePath, startByte, fileSize, durationSec, res, onEnd) {
   let fd;
@@ -145,19 +145,13 @@ function streamFile(filePath, startByte, fileSize, durationSec, res, onEnd) {
   let stopped = false;
   const buf = Buffer.alloc(CHUNK_BYTES);
 
-  // Calculate real-time pacing interval from bitrate
-  // bytesPerMs = fileSize / durationSec / 1000
+  // Pace at real-time bitrate so stream stays open for the full song duration.
+  // No burst — bursting causes the stream to end before viewers connect.
   const bytesPerMs = (durationSec > 0 && fileSize > 0)
     ? Math.min(Math.max(fileSize / durationSec / 1000, 8), 80)
     : 16;
   const intervalMs = Math.round(CHUNK_BYTES / bytesPerMs);
   log(`streaming: ${Math.round(bytesPerMs * 1000)} bytes/sec, chunk every ${intervalMs}ms`);
-
-  // Phase 1: burst the first 10 seconds of audio immediately so the browser
-  // fills its buffer and fires canplay fast. After that, pace at real-time.
-  const BURST_BYTES = Math.min(Math.round(bytesPerMs * 10000), 256 * 1024);
-  let bursting = true;
-  let burstSent = 0;
 
   function readChunk() {
     if (stopped) return;
@@ -173,27 +167,16 @@ function streamFile(filePath, startByte, fileSize, durationSec, res, onEnd) {
 
     if (bytesRead === 0) { cleanup(); return; }
     offset += bytesRead;
-    burstSent += bytesRead;
 
     try {
       const ok = res.write(buf.slice(0, bytesRead));
       if (!ok) {
-        res.once('drain', readChunk);
+        res.once('drain', () => setTimeout(readChunk, intervalMs));
         return;
       }
     } catch (_) { cleanup(); return; }
 
-    // Switch from burst to paced after initial fill
-    if (bursting && burstSent >= BURST_BYTES) {
-      bursting = false;
-      log(`burst complete (${burstSent} bytes), switching to paced delivery`);
-    }
-
-    if (bursting) {
-      setImmediate(readChunk);
-    } else {
-      setTimeout(readChunk, intervalMs);
-    }
+    setTimeout(readChunk, intervalMs);
   }
 
   function cleanup() {
