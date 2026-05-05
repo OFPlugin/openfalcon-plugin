@@ -145,10 +145,12 @@ function streamFile(filePath, startByte, fileSize, durationSec, res, onEnd) {
   let stopped = false;
   const buf = Buffer.alloc(CHUNK_BYTES);
 
-  // Pace at real-time bitrate so stream stays open for the full song duration.
-  // No burst — bursting causes the stream to end before viewers connect.
+  // Pace at 102% of real-time bitrate. Slightly faster than actual playback
+  // so the browser stays in lockstep with FPP's speakers. Without this,
+  // the browser falls behind and FPP moves to the next song while the
+  // browser is still playing the tail of the previous one.
   const bytesPerMs = (durationSec > 0 && fileSize > 0)
-    ? Math.min(Math.max(fileSize / durationSec / 1000, 8), 80)
+    ? Math.min(Math.max(fileSize / durationSec / 1000 * 1.02, 8), 80)
     : 16;
   const intervalMs = Math.round(CHUNK_BYTES / bytesPerMs);
   log(`streaming: ${Math.round(bytesPerMs * 1000)} bytes/sec, chunk every ${intervalMs}ms`);
