@@ -80,7 +80,14 @@ async function pollFppStatus() {
     const positionSec = parseFloat(data.seconds_elapsed || 0);
     const changed = filename !== fppStatus.filename || playing !== fppStatus.playing;
     fppStatus = { playing, filename, positionSec };
-    if (changed && filename) log(`now playing: "${filename}" at ${positionSec.toFixed(1)}s`);
+    if (changed && filename) {
+      log(`now playing: "${filename}" at ${positionSec.toFixed(1)}s`);
+      // Delay first syncPoint by 4 seconds after song change.
+      // This gives all devices time to finish buffering the new audio
+      // before a syncPoint arrives — so they all receive the SAME syncPoint
+      // and seek to the same position.
+      lastSyncPointAt = Date.now() + 2000; // suppress syncPoints for 2s
+    }
     broadcastPosition();
     broadcastSyncPointIfDue();
   } catch (_) {}
