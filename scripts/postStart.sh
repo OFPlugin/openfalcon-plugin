@@ -67,7 +67,9 @@ sleep 0.5
 if command -v node >/dev/null 2>&1; then
     NODE_MAJOR=$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)
     if [ "${NODE_MAJOR:-0}" -ge 18 ]; then
-        PORT=8090 \
+        AUDIO_PORT=$(grep -E '^audioDaemonPort' "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2)
+        : "${AUDIO_PORT:=8090}"
+        PORT="$AUDIO_PORT" \
         MEDIA_ROOT="/home/fpp/media/music" \
         FPP_HOST="http://127.0.0.1" \
         LOG_FILE="$LOG_DIR/showpilot-audio.log" \

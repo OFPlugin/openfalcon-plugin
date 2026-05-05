@@ -612,6 +612,7 @@ if (!empty(trim((string)$ps))) {
       <button type="button" class="of-tab-btn" data-tab="playlist" onclick="ofSwitchTab('playlist')">Playlist</button>
       <button type="button" class="of-tab-btn" data-tab="behavior" onclick="ofSwitchTab('behavior')">Behavior</button>
       <button type="button" class="of-tab-btn" data-tab="listener" onclick="ofSwitchTab('listener')">Listener</button>
+      <button type="button" class="of-tab-btn" data-tab="audio" onclick="ofSwitchTab('audio')">Audio</button>
       <button type="button" class="of-tab-btn" data-tab="diagnostics"
         onclick="ofSwitchTab('diagnostics')">Diagnostics</button>
       <button type="button" class="of-tab-btn" data-tab="developer"
@@ -853,6 +854,51 @@ if (!empty(trim((string)$ps))) {
       </div>
 
     </div><!-- /tab: listener -->
+
+    <!-- ============================================ -->
+    <!-- TAB: AUDIO DAEMON                            -->
+    <!-- ============================================ -->
+    <div class="of-tab-pane" data-tab-pane="audio">
+      <div class="of-section-header">
+        <h2>Audio Daemon</h2>
+      </div>
+
+      <p class="of-help">
+        ShowPilot's audio daemon runs on this Pi and streams the currently-playing
+        song directly to your ShowPilot server, which fans it out to all listener
+        phones simultaneously. This gives automatic sync — all phones hear the same
+        bytes at the same moment, locked to what's coming out of your speakers.
+      </p>
+
+      <div class="of-row">
+        <div>
+          <div class="of-label">Daemon status</div>
+          <div class="of-help">Shows whether the audio daemon is running on this Pi.</div>
+        </div>
+        <div class="of-control">
+          <span id="audioDaemonStatus" class="of-status muted">Checking…</span>
+          <button type="button" class="of-btn of-btn-secondary" onclick="checkAudioDaemon()"
+            style="margin-left: 0.5rem;">Refresh</button>
+        </div>
+      </div>
+
+      <div class="of-row">
+        <div>
+          <div class="of-label">Daemon port</div>
+          <div class="of-help">
+            Port the audio daemon listens on. Default is 8090. Must match the
+            "Daemon port" setting in your ShowPilot admin panel → Settings → Audio.
+          </div>
+        </div>
+        <div class="of-control">
+          <input type="number" class="of-input" id="audioDaemonPort" min="1024" max="65535"
+            value="<?php echo htmlspecialchars(val($pluginSettings, 'audioDaemonPort', '8090')); ?>"
+            onchange="SetPluginSetting('<?php echo $pluginName; ?>','audioDaemonPort',this.value);"
+            style="max-width: 120px;" />
+        </div>
+      </div>
+
+    </div><!-- /tab: audio -->
 
     <!-- ============================================ -->
     <!-- TAB: DIAGNOSTICS                             -->
@@ -1636,6 +1682,32 @@ if (!empty(trim((string)$ps))) {
   // ============================================================
   // Tab switching
   // ============================================================
+  async function checkAudioDaemon() {
+    const statusEl = document.getElementById('audioDaemonStatus');
+    if (!statusEl) return;
+    statusEl.textContent = 'Checking…';
+    statusEl.className = 'of-status muted';
+    const port = document.getElementById('audioDaemonPort')?.value || 8090;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/health`, {
+        signal: AbortSignal.timeout(3000),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        statusEl.textContent = `✓ Running v${data.version} on port ${port}`;
+        statusEl.className = 'of-status success';
+      } else {
+        statusEl.textContent = `Daemon returned HTTP ${res.status}`;
+        statusEl.className = 'of-status error';
+      }
+    } catch (_) {
+      statusEl.textContent = 'Not running — restart FPP or run the install script';
+      statusEl.className = 'of-status error';
+    }
+  }
+
+  // Auto-check daemon status when the Audio tab is opened
+  const _origSwitchTab = typeof ofSwitchTab === 'function' ? ofSwitchTab : null;
   function ofSwitchTab(name) {
     document.querySelectorAll('.of-tab-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.tab === name);
@@ -1645,6 +1717,8 @@ if (!empty(trim((string)$ps))) {
     });
     // Persist selection so refreshes return to same tab
     try { localStorage.setItem('showpilot_plugin_tab', name); } catch { }
+    // Auto-check daemon when audio tab is opened
+    if (name === 'audio') setTimeout(checkAudioDaemon, 300);
   }
   // Restore last-selected tab on load
   (function restoreTab() {
