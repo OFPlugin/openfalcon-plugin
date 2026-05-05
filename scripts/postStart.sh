@@ -33,6 +33,7 @@ chmod +x "$PLUGIN_DIR/scripts/"*.sh 2>/dev/null
 chmod +x "$PLUGIN_DIR/showpilot_listener.php" 2>/dev/null
 chmod +x "$PLUGIN_DIR/listener_status.php" 2>/dev/null
 chmod +x "$PLUGIN_DIR/extract_audio.php" 2>/dev/null
+chmod +x "$PLUGIN_DIR/audio_daemon_status.php" 2>/dev/null
 
 # Keep the plugin config writable by FPP's web/API process across older
 # installs, restores, and listener-created first-run files.
