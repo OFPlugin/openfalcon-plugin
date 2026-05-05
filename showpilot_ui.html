@@ -1687,15 +1687,16 @@ if (!empty(trim((string)$ps))) {
     if (!statusEl) return;
     statusEl.textContent = 'Checking…';
     statusEl.className = 'of-status muted';
+    const port = document.getElementById('audioDaemonPort')?.value || 8090;
     try {
-      // Use server-side PHP proxy — browser can't directly reach port 8090
-      // from the plugin UI due to cross-origin restrictions (different port).
-      const res = await fetch('audio_daemon_status.php', {
+      // FPP has a built-in reverse proxy at /proxy/<host>:<port>/<path> that
+      // forwards requests to local services — same origin, no CORS issues.
+      const res = await fetch(`/proxy/127.0.0.1:${port}/health`, {
         signal: AbortSignal.timeout(4000),
       });
-      const data = await res.json();
-      if (res.ok && data.ok) {
-        statusEl.textContent = `✓ Running v${data.version} on port ${data.port}`;
+      if (res.ok) {
+        const data = await res.json();
+        statusEl.textContent = `✓ Running v${data.version} on port ${port}`;
         statusEl.className = 'of-status success';
       } else {
         statusEl.textContent = 'Not running — restart FPP or run the install script';
