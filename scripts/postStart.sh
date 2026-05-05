@@ -44,6 +44,12 @@ sleep 1
 setsid /usr/bin/php "$PLUGIN_DIR/showpilot_listener.php" \
     </dev/null >/dev/null 2>&1 &
 
+# ---- Build C++ MultiSync plugin if not already built ----
+if [ ! -f "$PLUGIN_DIR/libshowpilot.so" ] && [ -f "$PLUGIN_DIR/Makefile" ] && [ -d "/opt/fpp/src" ]; then
+    echo "Building ShowPilot MultiSync plugin..."
+    cd "$PLUGIN_DIR" && make 2>/dev/null && echo "ShowPilot MultiSync plugin built" || true
+fi
+
 # 4. Spawn audio daemon if Node 18+ available
 if command -v node >/dev/null 2>&1; then
     NODE_MAJOR=$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)

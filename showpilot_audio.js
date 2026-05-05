@@ -101,7 +101,17 @@ function handleFppEvent(line) {
     log(`[fifo] MediaSyncStart: "${filename}"`);
     const changed = filename !== fppStatus.filename;
     fppStatus = { playing: true, filename, positionSec: 0 };
-    if (changed) lastSyncPointAt = Date.now() + 6000;
+    if (changed) {
+      // Suppress syncPoints for 3s to let devices buffer, then force one
+      lastSyncPointAt = Date.now() + 3000;
+      setTimeout(() => {
+        if (fppStatus.filename === filename) {
+          lastSyncPointAt = 0; // allow syncPoint to fire immediately
+          broadcastSyncPointIfDue();
+          log(`[fifo] forced syncPoint after MediaSyncStart for "${filename}"`);
+        }
+      }, 3100);
+    }
     broadcastPosition();
 
   } else if (type === 'MediaSyncStop' && parts.length >= 2) {
