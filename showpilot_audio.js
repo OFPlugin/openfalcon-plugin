@@ -86,7 +86,7 @@ async function pollFppStatus() {
       // This gives all devices time to finish buffering the new audio
       // before a syncPoint arrives — so they all receive the SAME syncPoint
       // and seek to the same position.
-      lastSyncPointAt = Date.now() + 2000; // suppress syncPoints for 2s
+      lastSyncPointAt = Date.now() + 6000; // suppress syncPoints for 6s after song change
     }
     broadcastPosition();
     broadcastSyncPointIfDue();
