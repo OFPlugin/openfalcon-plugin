@@ -105,12 +105,28 @@ function mimeForFile(filename) {
 // every 62ms — smooth and continuous, no 500ms gaps that trigger stall.
 // For 320kbps files we send ~2.5KB every 62ms.
 
-const CHUNK_BYTES = 1024; // 1KB per chunk for smooth delivery
+const CHUNK_BYTES = 2048; // 2KB per chunk
 
 function getBytesPerMs(fileSize, durationSec) {
-  if (!durationSec || durationSec <= 0) return 16; // fallback: 128kbps
-  // Add 10% headroom so we stay slightly ahead of playback
-  return (fileSize / durationSec / 1000) * 1.1;
+  // Calculate exact bitrate from file size and duration.
+  // If duration unknown, assume 128kbps (16,000 bytes/sec).
+  if (!durationSec || durationSec <= 0 || fileSize <= 0) {
+    log(`WARN: unknown duration/size, defaulting to 128kbps pacing`);
+    return 16; // 128kbps = 16 bytes/ms
+  }
+  const bytesPerMs = fileSize / durationSec / 1000;
+  log(`bitrate calc: ${fileSize} bytes / ${durationSec}s = ${Math.round(bytesPerMs * 1000)} bytes/sec = ${Math.round(bytesPerMs * 8)} kbps`);
+  // Sanity check — if calculated rate is unreasonably high or low, clamp it
+  // (prevents runaway streaming if FPP reports wrong duration)
+  if (bytesPerMs < 8) {
+    log(`WARN: calculated rate too low (${Math.round(bytesPerMs*1000)} B/s), clamping to 64kbps`);
+    return 8;
+  }
+  if (bytesPerMs > 80) {
+    log(`WARN: calculated rate too high (${Math.round(bytesPerMs*1000)} B/s), clamping to 640kbps`);
+    return 80;
+  }
+  return bytesPerMs;
 }
 
 function streamFileAtPace(filePath, startByte, fileSize, durationSec, res, onEnd) {
@@ -230,7 +246,6 @@ const server = http.createServer((req, res) => {
 
     const filePath = path.join(MEDIA_ROOT, rawName);
 
-    // Confirm file is inside MEDIA_ROOT (secondary guard)
     if (!filePath.startsWith(path.resolve(MEDIA_ROOT) + path.sep) &&
         filePath !== path.resolve(MEDIA_ROOT)) {
       res.writeHead(403, { 'Content-Type': 'text/plain' });
@@ -247,35 +262,49 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    // Calculate start byte from FPP's current position so ShowPilot's relay
-    // starts reading from where FPP currently is in the song. This means
-    // phones that connect mid-song join the stream at the correct position.
-    const positionSec = fppStatus.playing && fppStatus.filename === rawName
-      ? fppStatus.positionSec
-      : 0;
-    const durationSec = fppStatus.durationSec || 0;
-    const startByte = durationSec > 0
-      ? Math.floor((positionSec / durationSec) * stat.size)
-      : 0;
+    // Async IIFE — request handler is sync but we need await for meta fetch
+    (async () => {
+      const positionSec = fppStatus.playing && fppStatus.filename === rawName
+        ? fppStatus.positionSec
+        : 0;
 
-    const mime = mimeForFile(rawName);
+      // Get duration from FPP live status first, then fall back to media metadata API
+      let durationSec = fppStatus.durationSec || 0;
+      if (!durationSec) {
+        try {
+          const metaRes = await fetch(`${FPP_HOST}/api/media/${encodeURIComponent(rawName)}/meta`, {
+            signal: AbortSignal.timeout(2000),
+          });
+          if (metaRes.ok) {
+            const meta = await metaRes.json();
+            durationSec = parseFloat(meta.duration || meta.format?.duration || 0);
+          }
+        } catch (_) {}
+      }
+      log(`duration: ${durationSec}s for "${rawName}"`);
 
-    // No Content-Length — this is a live paced stream
-    res.writeHead(200, {
-      'Content-Type': mime,
-      'Cache-Control': 'no-store',
-      'X-Audio-Source': 'showpilot-daemon',
-      'X-Audio-Version': VERSION,
-      'X-Start-Byte': startByte,
-      'X-Position-Sec': positionSec.toFixed(3),
-    });
+      const startByte = durationSec > 0
+        ? Math.floor((positionSec / durationSec) * stat.size)
+        : 0;
 
-    log(`streaming "${rawName}" from byte ${startByte} (${positionSec.toFixed(1)}s)`);
+      const mime = mimeForFile(rawName);
 
-    streamFileAtPace(filePath, startByte, stat.size, fppStatus.durationSec || 0, res, () => {
-      log(`stream ended for "${rawName}"`);
-      try { res.end(); } catch (_) {}
-    });
+      res.writeHead(200, {
+        'Content-Type': mime,
+        'Cache-Control': 'no-store',
+        'X-Audio-Source': 'showpilot-daemon',
+        'X-Audio-Version': VERSION,
+        'X-Start-Byte': startByte,
+        'X-Position-Sec': positionSec.toFixed(3),
+      });
+
+      log(`streaming "${rawName}" from byte ${startByte} (${positionSec.toFixed(1)}s)`);
+
+      streamFileAtPace(filePath, startByte, stat.size, durationSec, res, () => {
+        log(`stream ended for "${rawName}"`);
+        try { res.end(); } catch (_) {}
+      });
+    })();
 
     return;
   }
