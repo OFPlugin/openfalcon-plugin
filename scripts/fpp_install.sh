@@ -78,11 +78,12 @@ if command -v node >/dev/null 2>&1; then
 fi
 
 # ---- Build C++ MultiSync plugin ----
-# Compiles FPPShowPilotSync.cpp which hooks FPP's internal sync engine
-# for sub-millisecond accurate position data via FIFO pipe.
+# Clean up old incorrectly-named .so if present
+rm -f "$PLUGIN_DIR/libfpp-showpilot-sync.so" 2>/dev/null || true
+
 if [ -f "$PLUGIN_DIR/Makefile" ] && [ -d "/opt/fpp/src" ]; then
     echo "Building ShowPilot MultiSync plugin..."
-    cd "$PLUGIN_DIR" && make 2>&1 && echo "ShowPilot MultiSync plugin built successfully" || echo "WARN: C++ plugin build failed — falling back to HTTP polling"
+    cd "$PLUGIN_DIR" && make clean && make 2>&1 && echo "ShowPilot MultiSync plugin built successfully" || echo "WARN: C++ plugin build failed — falling back to HTTP polling"
 else
     echo "WARN: FPP source not found at /opt/fpp/src — skipping C++ plugin build"
 fi
