@@ -91,14 +91,12 @@ function handleFppEvent(line) {
     fppStatus = { playing: true, filename, positionSec };
     if (changed) {
       log(`[fifo] now playing: "${filename}" at ${positionSec.toFixed(3)}s`);
-      // First packet after song change — suppress for 3s then fire syncPoint
-      // with accurate position so all devices coordinate on the same point.
       lastSyncPointAt = Date.now() + 3000;
       setTimeout(() => {
         if (fppStatus.filename === filename && fppStatus.playing) {
           lastSyncPointAt = 0;
           broadcastSyncPointIfDue();
-          log(`[fifo] syncPoint triggered from first MediaSyncPacket for "${filename}"`);
+          log(`[fifo] syncPoint triggered for "${filename}" at ${fppStatus.positionSec.toFixed(3)}s`);
         }
       }, 3100);
     }
@@ -195,6 +193,21 @@ async function pollFppStatus() {
     broadcastSyncPointIfDue();
   } catch (_) {}
 }
+
+// Heartbeat every 5 seconds — keeps WebSocket connections alive even when
+// FPP isn't playing. Without this, connections drop after a few minutes
+// of inactivity and miss the syncPoint window on song change.
+setInterval(() => {
+  if (wsClients.size === 0) return;
+  const msg = JSON.stringify({
+    type: 'heartbeat',
+    playing: fppStatus.playing,
+    serverTimestamp: Date.now(),
+  });
+  for (const ws of wsClients) {
+    try { ws.send(msg); } catch (_) { wsClients.delete(ws); }
+  }
+}, 5000);
 
 startFifoListener();
 setInterval(pollFppStatus, 250);
@@ -338,6 +351,17 @@ const server = http.createServer((req, res) => {
 
 if (WebSocketServer) {
   const wss = new WebSocketServer({ server });
+
+  // Ping all clients every 30 seconds to keep connections alive.
+  // Without this, the connection drops after a few minutes of no data.
+  setInterval(() => {
+    for (const ws of wsClients) {
+      if (ws.readyState === ws.OPEN) {
+        try { ws.ping(); } catch (_) { wsClients.delete(ws); }
+      }
+    }
+  }, 30000);
+
   wss.on('connection', (ws, req) => {
     wsClients.add(ws);
     log(`WebSocket connected (${wsClients.size} total) from ${req.socket.remoteAddress}`);
@@ -349,6 +373,7 @@ if (WebSocketServer) {
       positionSec: fppStatus.positionSec,
       serverTimestamp: Date.now(),
     }));
+    ws.on('pong', () => {}); // keepalive response
     ws.on('close', () => { wsClients.delete(ws); log(`WebSocket disconnected (${wsClients.size} remaining)`); });
     ws.on('error', () => wsClients.delete(ws));
   });
