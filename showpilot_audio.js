@@ -187,7 +187,7 @@ async function pollFppStatus() {
     fppStatus = { playing, filename, positionSec };
     if (changed && filename) {
       log(`[http] now playing: "${filename}" at ${positionSec.toFixed(1)}s`);
-      lastSyncPointAt = Date.now() + 6000;
+      // Don't suppress syncPoints here — FIFO handler manages suppression timing
     }
     broadcastPosition();
     broadcastSyncPointIfDue();
