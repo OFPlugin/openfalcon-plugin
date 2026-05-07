@@ -36,6 +36,16 @@ chown fpp:fpp "$CONFIG_FILE" 2>/dev/null
 chmod 666 "$CONFIG_FILE" 2>/dev/null
 
 # 2. Kill any existing processes
+# Try PID file first (clean), fall back to pkill (covers old installs)
+if [ -f /tmp/showpilot-audio.pid ]; then
+    OLD_PID=$(cat /tmp/showpilot-audio.pid 2>/dev/null)
+    if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+        kill "$OLD_PID" 2>/dev/null
+        sleep 0.5
+        kill -9 "$OLD_PID" 2>/dev/null || true
+    fi
+    rm -f /tmp/showpilot-audio.pid
+fi
 pkill -f "php $PLUGIN_DIR/showpilot_listener.php" 2>/dev/null
 pkill -f "node $PLUGIN_DIR/showpilot_audio.js" 2>/dev/null
 sleep 1

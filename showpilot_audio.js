@@ -379,12 +379,24 @@ if (WebSocketServer) {
   });
 }
 
+const PID_FILE = '/tmp/showpilot-audio.pid';
+
 server.listen(PORT, '0.0.0.0', () => {
-  log(`ShowPilot audio daemon v${VERSION} listening on port ${PORT}`);
+  // Write PID file so postStart.sh and upgrade scripts can kill us precisely
+  try { require('fs').writeFileSync(PID_FILE, String(process.pid)); } catch (_) {}
+  log(`ShowPilot audio daemon v${VERSION} listening on port ${PORT} (pid ${process.pid})`);
   log(`Media root: ${MEDIA_ROOT}`);
   log(`FPP host: ${FPP_HOST}`);
 });
 
 server.on('error', (err) => { log('SERVER ERROR:', err.message); process.exit(1); });
-process.on('SIGTERM', () => { log('SIGTERM, shutting down'); server.close(() => process.exit(0)); });
-process.on('SIGINT',  () => { log('SIGINT, shutting down');  server.close(() => process.exit(0)); });
+process.on('SIGTERM', () => {
+  log('SIGTERM, shutting down');
+  try { require('fs').unlinkSync(PID_FILE); } catch (_) {}
+  server.close(() => process.exit(0));
+});
+process.on('SIGINT', () => {
+  log('SIGINT, shutting down');
+  try { require('fs').unlinkSync(PID_FILE); } catch (_) {}
+  server.close(() => process.exit(0));
+});
