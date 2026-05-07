@@ -91,14 +91,14 @@ function handleFppEvent(line) {
     fppStatus = { playing: true, filename, positionSec };
     if (changed) {
       log(`[fifo] now playing: "${filename}" at ${positionSec.toFixed(3)}s`);
-      lastSyncPointAt = Date.now() + 1500;
+      lastSyncPointAt = Date.now() + 800;
       setTimeout(() => {
         if (fppStatus.filename === filename && fppStatus.playing) {
           lastSyncPointAt = 0;
           broadcastSyncPointIfDue();
           log(`[fifo] syncPoint triggered for "${filename}" at ${fppStatus.positionSec.toFixed(3)}s`);
         }
-      }, 3100);
+      }, 1500);
     }
     broadcastPosition();
     broadcastSyncPointIfDue();
@@ -108,7 +108,7 @@ function handleFppEvent(line) {
     log(`[fifo] MediaSyncStart: "${filename}"`);
     fppStatus = { playing: true, filename, positionSec: 0 };
     // Suppress syncPoints until first MediaSyncPacket arrives with real position
-    lastSyncPointAt = Date.now() + 2000;
+    lastSyncPointAt = Date.now() + 1000;
     broadcastPosition();
 
   } else if (type === 'MediaSyncStop' && parts.length >= 2) {
