@@ -98,7 +98,7 @@ function handleFppEvent(line) {
           broadcastSyncPointIfDue();
           log(`[fifo] syncPoint triggered for "${filename}" at ${fppStatus.positionSec.toFixed(3)}s`);
         }
-      }, 1500);
+      }, 1000);
     }
     broadcastPosition();
     broadcastSyncPointIfDue();
@@ -247,7 +247,7 @@ let lastSyncPointAt = 0;
 function broadcastSyncPointIfDue() {
   if (wsClients.size === 0) return;
   const now = Date.now();
-  if (now - lastSyncPointAt < 2000) return;
+  if (now - lastSyncPointAt < 1000) return;
   lastSyncPointAt = now;
   const msg = JSON.stringify({
     type: 'syncPoint',
