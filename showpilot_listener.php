@@ -648,33 +648,6 @@ function insertPlaylistImmediate($playlistName, $playlistIndex) {
     @file_get_contents($url, false, $context);
 }
 
-// Resolve the current 1-based playlist index of a sequence by name.
-// When cooldown suppression is active, sequences get removed from the
-// playlist file, shifting the indices of everything after them. The
-// sort_order stored in ShowPilot's DB becomes stale. This function
-// reads the live playlist file and finds the actual current position,
-// falling back to the stored index if the file can't be read or the
-// sequence isn't found (e.g. it's currently removed due to cooldown —
-// in that case the insert will fail gracefully and the next poll catches it).
-function resolvePlaylistIndex($playlistName, $sequenceName, $storedIndex) {
-    if (empty($playlistName) || empty($sequenceName)) return $storedIndex;
-
-    $playlistPath = '/home/fpp/media/playlists/' . $playlistName . '.json';
-    if (!file_exists($playlistPath)) return $storedIndex;
-    $json = @file_get_contents($playlistPath);
-    if ($json === false) return $storedIndex;
-    $data = json_decode($json, true);
-    if (!is_array($data) || !isset($data['mainPlaylist'])) return $storedIndex;
-
-    foreach ($data['mainPlaylist'] as $idx => $item) {
-        $entryFile = isset($item['sequenceName']) ? $item['sequenceName']
-                   : (isset($item['mediaName']) ? $item['mediaName'] : '');
-        if (pathinfo($entryFile, PATHINFO_FILENAME) === $sequenceName) {
-            return $idx + 1; // FPP uses 1-based indices
-        }
-    }
-    return $storedIndex; // not found — fallback
-}
 
 function getSequenceName($fppStatus) {
     $name = pathinfo($fppStatus->current_sequence, PATHINFO_FILENAME);
@@ -993,13 +966,9 @@ while (true) {
                 $haveQueuedRequests = count($pendingRequests) > 0;
                 $shouldQueue = $within_cooldown || $isViewerRequestPlaying || $haveQueuedRequests;
 
-                // Resolve the live playlist index — stored sort_order may be stale
-                // if cooldown suppression has removed entries and shifted positions.
-                $liveIdx = resolvePlaylistIndex($cfg['remotePlaylist'], $nextSeq, $nextIdx);
-
                 if ($effectiveInterrupt && !$shouldQueue) {
-                    logEntry("Interrupting schedule with: $nextSeq at playlist index $liveIdx");
-                    insertPlaylistImmediate($cfg['remotePlaylist'], $liveIdx);
+                    logEntry("Interrupting schedule with: $nextSeq at playlist index $nextIdx");
+                    insertPlaylistImmediate($cfg['remotePlaylist'], $nextIdx);
                     $lastImmediateAt = time();
                     $pendingRequests[] = $nextSeq;
                 } else {
@@ -1016,8 +985,8 @@ while (true) {
                                 : ($haveQueuedRequests
                                     ? "requests still in queue"
                                     : "cooldown after recent insert")));
-                    logEntry("Queueing after current ($reason): $nextSeq at playlist index $liveIdx");
-                    insertPlaylistAfterCurrent($cfg['remotePlaylist'], $liveIdx);
+                    logEntry("Queueing after current ($reason): $nextSeq at playlist index $nextIdx");
+                    insertPlaylistAfterCurrent($cfg['remotePlaylist'], $nextIdx);
                     $pendingRequests[] = $nextSeq;
                 }
                 $lastQueuedForSequence = $currentlyPlaying;
