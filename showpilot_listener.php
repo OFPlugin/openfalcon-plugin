@@ -958,7 +958,19 @@ while (true) {
                 $haveQueuedRequests = count($pendingRequests) > 0;
                 $shouldQueue = $within_cooldown || $isViewerRequestPlaying || $haveQueuedRequests;
 
-                if ($effectiveInterrupt && !$shouldQueue) {
+                // Don't re-insert a sequence already in our pending queue.
+                // ShowPilot keeps returning the same nextRequest until the
+                // plugin confirms it started playing (via /playing). Without
+                // this guard, $shouldCheck fires near the end of each queued
+                // song and inserts the next one a second time — causing
+                // doubles in FPP's queue and skipped songs.
+                if (in_array($nextSeq, $pendingRequests, true)) {
+                    logEntry_verbose("Already queued '$nextSeq' — skipping duplicate insert");
+                    if (!$effectiveInterrupt) {
+                        $lastQueuedForSequence = $currentlyPlaying;
+                        $lastQueuedAt = time();
+                    }
+                } elseif ($effectiveInterrupt && !$shouldQueue) {
                     logEntry("Interrupting schedule with: $nextSeq at playlist index $nextIdx");
                     insertPlaylistImmediate($cfg['remotePlaylist'], $nextIdx);
                     $lastImmediateAt = time();
@@ -980,15 +992,15 @@ while (true) {
                     logEntry("Queueing after current ($reason): $nextSeq at playlist index $nextIdx");
                     insertPlaylistAfterCurrent($cfg['remotePlaylist'], $nextIdx);
                     $pendingRequests[] = $nextSeq;
+                    if (!$effectiveInterrupt) {
+                        $waitTime = $cfg['requestFetchTime'] + $cfg['additionalWaitTime'];
+                        logEntry("Sleeping $waitTime seconds after queue");
+                        sleep($waitTime);
+                    }
                 }
                 $lastQueuedForSequence = $currentlyPlaying;
                 $lastQueuedAt = time();
 
-                if (!$effectiveInterrupt) {
-                    $waitTime = $cfg['requestFetchTime'] + $cfg['additionalWaitTime'];
-                    logEntry("Sleeping $waitTime seconds after queue");
-                    sleep($waitTime);
-                }
             } elseif ($nextSeq !== null && $nextIdx === null) {
                 logEntry("WARN - Got sequence '$nextSeq' but no playlist index. Sync playlist first?");
                 // Mark as checked so we don't spam
