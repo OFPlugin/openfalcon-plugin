@@ -413,14 +413,16 @@ function applyPlaylistPatches($patches, $currentPlaylist) {
     $data = json_decode($json, true);
     if (!is_array($data) || !isset($data['mainPlaylist'])) return;
 
-    // Build lookup: name-without-ext => desired enabled state
+    // Build lookup: name-without-ext => desired enabled state.
+    // Patches come from ofHttp (json_decode without true flag) so each patch
+    // is a stdClass object — use object property access, not array syntax.
     $patchMap = array();
     foreach ($patches as $patch) {
-        $name = isset($patch['sequenceName']) ? $patch['sequenceName'] : '';
+        $name = isset($patch->sequenceName) ? $patch->sequenceName : '';
         if ($name === '') continue;
         $patchMap[$name] = array(
-            'enabled'    => !empty($patch['enabled']),
-            'reenableAt' => isset($patch['reenableAt']) ? $patch['reenableAt'] : null,
+            'enabled'    => !empty($patch->enabled),
+            'reenableAt' => isset($patch->reenableAt) ? $patch->reenableAt : null,
         );
     }
 
@@ -465,18 +467,19 @@ function applyPlaylistPatches($patches, $currentPlaylist) {
         return;
     }
 
-    // Persist re-enable timestamps for sequences being disabled
+    // Persist re-enable timestamps for sequences being disabled.
+    // Use object property access — patches are stdClass from ofHttp.
     $state = loadCooldownState();
     foreach ($patches as $patch) {
-        $name = isset($patch['sequenceName']) ? $patch['sequenceName'] : '';
-        if ($name === '' || !empty($patch['enabled'])) {
+        $name = isset($patch->sequenceName) ? $patch->sequenceName : '';
+        if ($name === '' || !empty($patch->enabled)) {
             // Either no name or this is a re-enable patch — remove from state
             if ($name !== '') unset($state[$name]);
             continue;
         }
-        if (!empty($patch['reenableAt'])) {
+        if (!empty($patch->reenableAt)) {
             $state[$name] = array(
-                'reenableAt'      => $patch['reenableAt'],
+                'reenableAt'      => $patch->reenableAt,
                 'playlist'        => $currentPlaylist,
             );
         }
