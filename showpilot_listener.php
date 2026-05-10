@@ -123,6 +123,7 @@ if ($cfg === null) {
     logEntry("FATAL - Unable to read plugin config. Exiting.");
     exit(1);
 }
+$GLOBALS['cfg'] = $cfg; // make accessible inside functions via $GLOBALS['cfg']
 $GLOBALS['verboseLogging'] = $cfg['verboseLogging'];
 
 logEntry("Server URL: " . $cfg['serverUrl']);
@@ -610,6 +611,88 @@ function processPendingReenables($currentPlaylist) {
     if ($changed) saveCooldownState($state);
 }
 
+// ============================================================
+// Dynamic queue playlist management
+//
+// We maintain a dedicated FPP playlist file ("ShowPilot Queue") that
+// always reflects the current pending request order. Each time the queue
+// changes, we rewrite this file and insert it as a range. FPP plays
+// through the full range and skip works correctly across all queued songs.
+//
+// The request pool playlist (remotePlaylist) is never modified — it's
+// only used for sort_order lookups. The queue playlist is a separate file
+// we own entirely.
+// ============================================================
+
+$queuePlaylistName = 'ShowPilot Queue';
+
+function getQueuePlaylistPath() {
+    return '/home/fpp/media/playlists/ShowPilot Queue.json';
+}
+
+// Rebuild the ShowPilot Queue playlist file from the current $pendingQueue.
+// Returns true on success. The playlist contains exactly the pending songs
+// in order at indices 1, 2, 3... so we can always insert range 1/N.
+function rebuildQueuePlaylist($pendingQueue) {
+    if (empty($pendingQueue)) return true;
+
+    // We need the full entry objects from the remote playlist to write
+    // a valid FPP playlist. Read the remote playlist to get entry metadata.
+    $remotePath = '/home/fpp/media/playlists/' . basename($GLOBALS['cfg']['remotePlaylist']) . '.json';
+    if (!file_exists($remotePath)) {
+        logEntry("[queue] Remote playlist file not found: $remotePath");
+        return false;
+    }
+    $json = @file_get_contents($remotePath);
+    if ($json === false) return false;
+    $remoteData = json_decode($json, true);
+    if (!is_array($remoteData) || !isset($remoteData['mainPlaylist'])) return false;
+
+    // Build a lookup: index (1-based) => entry object
+    $byIndex = array();
+    foreach ($remoteData['mainPlaylist'] as $i => $item) {
+        $byIndex[$i + 1] = $item;
+    }
+
+    // Build the queue playlist entries in pending order
+    $entries = array();
+    foreach ($pendingQueue as $pending) {
+        $idx = $pending['idx'];
+        if (isset($byIndex[$idx])) {
+            $entries[] = $byIndex[$idx];
+        } else {
+            logEntry("[queue] Warning: index $idx not found in remote playlist");
+        }
+    }
+
+    if (empty($entries)) return false;
+
+    $playlist = array(
+        'name'         => 'ShowPilot Queue',
+        'mainPlaylist' => $entries,
+        'leadIn'       => array(),
+        'leadOut'      => array(),
+        'repeat'       => 0,
+        'loopCount'    => 0,
+        'description'  => 'Managed by ShowPilot plugin — do not edit manually',
+    );
+
+    $path = getQueuePlaylistPath();
+    $tmp  = $path . '.tmp';
+    $written = @file_put_contents($tmp, json_encode($playlist, JSON_PRETTY_PRINT));
+    if ($written === false) {
+        logEntry("[queue] ERROR: could not write queue playlist");
+        return false;
+    }
+    if (!@rename($tmp, $path)) {
+        logEntry("[queue] ERROR: could not rename queue playlist");
+        @unlink($tmp);
+        return false;
+    }
+    logEntry_verbose("[queue] Rebuilt queue playlist with " . count($entries) . " songs");
+    return true;
+}
+
 function getFppStatus() {
     $options = array('http' => array('timeout' => 5));
     $context = stream_context_create($options);
@@ -618,12 +701,14 @@ function getFppStatus() {
     return json_decode($result);
 }
 
-function insertPlaylistAfterCurrent($playlistName, $playlistIndex) {
-    // FPP API: Insert Playlist After Current/<playlist>/<startIndex>/<endIndex>
-    // start and end both set to the sequence's index so only that one plays
+function insertPlaylistAfterCurrent($playlistName, $startIndex, $endIndex = null) {
+    // Insert a range from the remote playlist after the current song.
+    // Passing start != end queues multiple songs FPP can skip through.
     $playlist = rawurlencode($playlistName);
-    $idx = intval($playlistIndex);
-    $url = "http://127.0.0.1/api/command/Insert%20Playlist%20After%20Current/" . $playlist . "/" . $idx . "/" . $idx;
+    $start = intval($startIndex);
+    $end   = ($endIndex !== null) ? intval($endIndex) : $start;
+    $url = "http://127.0.0.1/api/command/Insert%20Playlist%20After%20Current/"
+         . $playlist . "/" . $start . "/" . $end;
     $options = array('http' => array('timeout' => 5));
     $context = stream_context_create($options);
     @file_get_contents($url, false, $context);
@@ -696,18 +781,11 @@ $lastNextReported = "";
 $lastQueuedForSequence = "";
 $lastQueuedAt = 0;
 $lastInsertedSequence = "";   // (legacy; kept for compat — no longer drives logic)
-$lastImmediateAt = 0;         // Timestamp of last Immediate insert. We treat the
-                              // ~8 seconds after as "request still settling" so
-                              // rapid follow-up requests queue, not clobber.
-$lastRemoteEndedAt = 0;       // Timestamp when current_playlist last switched FROM
-                              // remote back to main. Suppress insertPlaylistImmediate
-                              // briefly after this to avoid racing with the queued
-                              // song FPP is about to start.
 $lastWasRemote = false;       // Tracks previous loop's $playingFromRemote value
-                              // so we can detect the remote→main transition.
-$pendingRequests = array();   // Sequences we've queued/inserted that haven't
-                              // yet been confirmed as played. As long as this
-                              // is non-empty, new requests get queued (After Current).
+// Pending queue: array of ['name' => sequenceName, 'idx' => playlistIndex]
+// Tracks songs handed to FPP that haven't played yet. Used to rebuild the
+// insertPlaylistAfterCurrent range whenever a new request comes in.
+$pendingQueue = array();
 $lastHeartbeat = 0;
 $sequencesClearedWhenIdle = false;
 
@@ -776,8 +854,10 @@ while (true) {
             $lastInsertedSequence = '';
             $lastImmediateAt = 0;
             $pendingRequests = array();
+            $pendingQueue = array();
             $sequencesClearedWhenIdle = true;
-            $lastRemoteEndedAt = 0;
+            $lastQueuedForSequence = '';
+            $lastQueuedAt = 0;
             $lastWasRemote = false;
             // Clear all playlist snapshots so the next show start gets fresh ones.
             // We clear everything in the snapshot key rather than tracking which
@@ -821,27 +901,33 @@ while (true) {
         ofReportPlaying($currentlyPlaying, $secondsPlayed);
         $lastPlayingReported = $currentlyPlaying;
 
-        // When a new sequence starts playing, clean up our queue tracking.
-        // If the sequence is one we queued: remove it AND everything before it
-        //   (those earlier ones must have played already; FIFO order).
-        // If the sequence isn't ours: schedule has resumed — clear all.
-        // We no longer need to keep the playing entry in pendingRequests —
-        // interrupt decisions now use $playingFromRemote (current_playlist)
-        // instead of $isViewerRequestPlaying, which is more reliable.
-        $idx = array_search($currentlyPlaying, $pendingRequests, true);
-        if ($idx !== false) {
-            $pendingRequests = array_slice($pendingRequests, $idx + 1);
+        // When a sequence starts playing, update our pending queue.
+        // Find it by name; if found, remove it and everything before it
+        // (FIFO — earlier entries already played). Rebuild FPP's after-current
+        // range from whatever is still pending.
+        $foundIdx = -1;
+        foreach ($pendingQueue as $i => $entry) {
+            if ($entry['name'] === $currentlyPlaying) {
+                $foundIdx = $i;
+                break;
+            }
+        }
+        if ($foundIdx >= 0) {
+            $pendingQueue = array_slice($pendingQueue, $foundIdx + 1);
+            // Rebuild FPP's after-current with remaining songs
+            if (!empty($pendingQueue)) {
+                rebuildQueuePlaylist($pendingQueue);
+                $remaining = count($pendingQueue);
+                insertPlaylistAfterCurrent('ShowPilot Queue', 1, $remaining);
+                logEntry_verbose("Rebuilt queue after '$currentlyPlaying' played: $remaining songs remaining");
+            }
         } else {
-            // Could be schedule resuming, OR it could be an unrelated sequence
-            // playing briefly between our requests. Be cautious — only clear
-            // the queue if we're sure (current playlist isn't the remote one).
+            // Not one of ours — schedule resumed, clear pending queue
             $playingFromRemote = isset($fppStatus->current_playlist->playlist)
                 && $fppStatus->current_playlist->playlist === $cfg['remotePlaylist'];
-            if (!$playingFromRemote) {
-                if (!empty($pendingRequests)) {
-                    logEntry_verbose("Schedule resumed (playing $currentlyPlaying); clearing queue tracker");
-                }
-                $pendingRequests = array();
+            if (!$playingFromRemote && !empty($pendingQueue)) {
+                logEntry_verbose("Schedule resumed; clearing pending queue");
+                $pendingQueue = array();
             }
         }
     }
@@ -905,70 +991,54 @@ while (true) {
     $isVotingMode = ($cachedMode === 'VOTING');
     $effectiveInterrupt = $cfg['interruptSchedule'] && !$isVotingMode;
 
-    // Determine whether FPP is currently playing a viewer request (remote playlist)
-    // or the main scheduled playlist. This is the key signal for queue decisions:
+    // ----------------------------------------------------------------
+    // Queue decision logic
     //
-    //   main playlist playing → interrupt mode can fire insertPlaylistImmediate
-    //   remote playlist playing → a viewer request is active; use non-interrupt
-    //                             logic (queue near end of song, one at a time)
+    // FPP supports inserting a playlist RANGE (startIndex/endIndex) via
+    // insertPlaylistAfterCurrent. Multiple songs inserted as a range all
+    // queue up in FPP and can be skipped through. We maintain $pendingQueue
+    // (ordered list of {name, idx}) and rebuild the range on every new
+    // request so FPP always has the full remaining queue.
     //
-    // This mirrors how Remote Falcon's plugin works — it uses current_playlist
-    // rather than tracking pending requests, which is simpler and more reliable.
+    // Flow:
+    //   First request, main playlist playing → insertPlaylistImmediate(song)
+    //   Additional requests → append to $pendingQueue, rebuild afterCurrent range
+    //   Song starts playing → remove from $pendingQueue, rebuild range
+    // ----------------------------------------------------------------
     $playingFromRemote = isset($fppStatus->current_playlist->playlist)
         && $fppStatus->current_playlist->playlist === $cfg['remotePlaylist'];
 
-    // Detect remote→main transition. When a viewer request finishes and FPP
-    // switches back to the main playlist, record the time. We suppress
-    // insertPlaylistImmediate for a few seconds after this transition to avoid
-    // a race where the plugin interrupts before FPP has started the next queued
-    // song (insertPlaylistAfterCurrent queued near the end of the request).
+    // Detect transitions for logging
     if ($lastWasRemote && !$playingFromRemote) {
-        $lastRemoteEndedAt = time();
-        logEntry_verbose("Remote playlist ended — suppressing interrupts briefly");
+        logEntry_verbose("Remote playlist ended — returned to main playlist");
     }
     $lastWasRemote = $playingFromRemote;
 
-    $shouldCheck = false;
-    if ($effectiveInterrupt && !$playingFromRemote) {
-        // Interrupt mode: main playlist is playing — check every loop so we
-        // can interrupt as soon as a request comes in.
-        $shouldCheck = true;
-    } elseif ($effectiveInterrupt && $playingFromRemote) {
-        // Interrupt mode but a viewer request is currently playing — switch
-        // to non-interrupt behaviour: only queue near the end of the song
-        // so we don't overwrite FPP's single "after current" slot.
+    // Always check for new requests — we handle rate limiting via $lastQueuedAt
+    $shouldCheck = true;
+    // In non-interrupt / voting mode, only check near end of song
+    if (!$effectiveInterrupt || $isVotingMode) {
         $secondsRemaining = intVal($fppStatus->seconds_remaining ?? 999);
-        if ($secondsRemaining <= $cfg['requestFetchTime']) {
-            $shouldCheck = true;
-        }
-    } else {
-        // Non-interrupt OR voting mode: only check when current song is about to end
-        $secondsRemaining = intVal($fppStatus->seconds_remaining ?? 999);
-        if ($secondsRemaining <= $cfg['requestFetchTime']) {
-            $shouldCheck = true;
-        }
+        $shouldCheck = ($secondsRemaining < $cfg['requestFetchTime']);
     }
 
-    // Avoid queueing twice for the same currently-playing sequence
-    if ($shouldCheck) {
-        if ($currentlyPlaying === $lastQueuedForSequence) {
-            $sinceQueue = time() - $lastQueuedAt;
-            if ($sinceQueue < ($cfg['requestFetchTime'] + $cfg['additionalWaitTime'] + 2)) {
-                $shouldCheck = false;
-            }
+    // After inserting, hold briefly to avoid duplicate fetches within
+    // the same second (loop runs every 1s, HTTP round trip takes ~100ms)
+    if ($shouldCheck && $lastQueuedAt > 0) {
+        $sinceQueue = time() - $lastQueuedAt;
+        if ($sinceQueue < 2) {
+            $shouldCheck = false;
+            logEntry_verbose("Post-insert hold ({$sinceQueue}s), skipping");
         }
     }
 
     if ($shouldCheck && !empty($cfg['remotePlaylist'])) {
         $state = ofGetState();
         if ($state !== null) {
-            // Apply playlist cooldown patches (v0.13.40+).
-            // Only patch the main scheduled playlist — never the remotePlaylist,
-            // which is ShowPilot's request pool and must not be modified.
+            // Apply playlist cooldown patches — main playlist only
             if (isset($state->playlistPatches) && is_array($state->playlistPatches)) {
                 $currentPlaylistName = isset($fppStatus->current_playlist->playlist)
-                    ? $fppStatus->current_playlist->playlist
-                    : '';
+                    ? $fppStatus->current_playlist->playlist : '';
                 if (!empty($currentPlaylistName) && $currentPlaylistName !== $cfg['remotePlaylist']) {
                     applyPlaylistPatches($state->playlistPatches, $currentPlaylistName);
                 }
@@ -988,44 +1058,45 @@ while (true) {
             }
 
             if ($nextSeq !== null && $nextIdx !== null) {
-                // Use current_playlist to decide insert strategy — same approach
-                // as RF's plugin. When main playlist is playing, interrupt it.
-                // When remote playlist is playing (viewer request active), queue
-                // after current. The $lastQueuedForSequence guard above prevents
-                // re-queueing for the same song within the timing window.
-                $within_cooldown = ($lastImmediateAt > 0 && (time() - $lastImmediateAt) < 8);
-                // Also suppress interrupts briefly after remote playlist ends —
-                // FPP needs a moment to start the queued afterCurrent song.
-                $afterRemoteTransition = ($lastRemoteEndedAt > 0 && (time() - $lastRemoteEndedAt) < 10);
-
-                if ($effectiveInterrupt && !$playingFromRemote && !$within_cooldown && !$afterRemoteTransition) {
-                    logEntry("Interrupting schedule with: $nextSeq at playlist index $nextIdx");
-                    insertPlaylistImmediate($cfg['remotePlaylist'], $nextIdx);
-                    $lastImmediateAt = time();
-                    $pendingRequests[] = $nextSeq;
-                } else {
-                    // Queue after current — covers: voting mode, non-interrupt
-                    // jukebox, viewer request already playing, recent interrupt.
-                    $reason = $isVotingMode
-                        ? "voting mode (winner queued for after current song)"
-                        : (!$cfg['interruptSchedule']
-                            ? "non-interrupt mode"
-                            : ($playingFromRemote
-                                ? "viewer request playing"
-                                : "cooldown after recent insert"));
-                    logEntry("Queueing after current ($reason): $nextSeq at playlist index $nextIdx");
-                    insertPlaylistAfterCurrent($cfg['remotePlaylist'], $nextIdx);
-                    $pendingRequests[] = $nextSeq;
-                    if (!$effectiveInterrupt) {
-                        $waitTime = $cfg['requestFetchTime'] + $cfg['additionalWaitTime'];
-                        logEntry("Sleeping $waitTime seconds after queue");
-                        sleep($waitTime);
-                    }
+                // Check if this song is already in our pending queue (shouldn't
+                // happen since ShowPilot pops on handoff, but be safe)
+                $alreadyPending = false;
+                foreach ($pendingQueue as $entry) {
+                    if ($entry['name'] === $nextSeq) { $alreadyPending = true; break; }
                 }
-                $lastQueuedForSequence = $currentlyPlaying;
-                $lastQueuedAt = time();
 
-            } elseif ($nextSeq !== null && $nextIdx === null) {
+                if (!$alreadyPending) {
+                    // Add to pending queue and rebuild the ShowPilot Queue playlist
+                    $pendingQueue[] = ['name' => $nextSeq, 'idx' => intval($nextIdx)];
+                    $lastQueuedAt = time();
+                    $queueCount = count($pendingQueue);
+
+                    // Rebuild the dynamic queue playlist file with all pending songs
+                    $rebuilt = rebuildQueuePlaylist($pendingQueue);
+
+                    if (!$playingFromRemote && $queueCount === 1) {
+                        // First request, main playlist playing — interrupt immediately
+                        logEntry("Interrupting schedule with: $nextSeq at playlist index $nextIdx");
+                        insertPlaylistImmediate($cfg['remotePlaylist'], $nextIdx);
+                    } elseif ($rebuilt && $queueCount > 1) {
+                        // Additional requests — insert full queue as a range so
+                        // skip works through all pending songs
+                        $reason = $isVotingMode ? "voting mode"
+                            : (!$cfg['interruptSchedule'] ? "non-interrupt mode"
+                            : "request queued");
+                        logEntry("Queuing ($reason): $nextSeq added ($queueCount songs total in queue)");
+                        insertPlaylistAfterCurrent('ShowPilot Queue', 1, $queueCount);
+                    } else {
+                        // Fallback: single-song insert into remote playlist
+                        $reason = $isVotingMode ? "voting mode" : "request queued";
+                        logEntry("Queuing ($reason): $nextSeq at index $nextIdx");
+                        insertPlaylistAfterCurrent($cfg['remotePlaylist'], intval($nextIdx));
+                    }
+                } else {
+                    logEntry_verbose("'$nextSeq' already in pending queue, skipping");
+                }
+
+                        } elseif ($nextSeq !== null && $nextIdx === null) {
                 logEntry("WARN - Got sequence '$nextSeq' but no playlist index. Sync playlist first?");
                 // Mark as checked so we don't spam
                 $lastQueuedForSequence = $currentlyPlaying;
