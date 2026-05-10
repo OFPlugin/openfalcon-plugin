@@ -437,16 +437,6 @@ function maybeSnapshotPlaylist($playlistName) {
     logEntry("[cooldown] Snapshotted playlist '$playlistName' (" . count($data['mainPlaylist']) . " items)");
 }
 
-// Clear the snapshot for a playlist when the show ends (FPP goes idle).
-// This ensures the next show start gets a fresh snapshot.
-function clearPlaylistSnapshot($playlistName) {
-    if (empty($playlistName)) return;
-    $state = loadCooldownState();
-    if (!isset($state['snapshot'][$playlistName])) return;
-    unset($state['snapshot'][$playlistName]);
-    saveCooldownState($state);
-    logEntry("[cooldown] Cleared snapshot for '$playlistName'");
-}
 
 // Write a playlist array back to disk atomically.
 function writePlaylist($playlistName, $data) {
@@ -720,10 +710,6 @@ $sequencesClearedWhenIdle = false;
 $cachedMode = null;
 $cachedModeAt = 0;
 
-// Track the last-seen playlist name so we can detect show start and
-// take a fresh snapshot for cooldown re-insertion.
-$lastActivePlaylists = '';
-
 // On startup: process any cooldown re-enables that came due while the plugin
 // was stopped. Pass empty string for playlist — processPendingReenables uses
 // the stored playlist name from the cooldown state file, so it works even
@@ -785,10 +771,15 @@ while (true) {
             $lastImmediateAt = 0;
             $pendingRequests = array();
             $sequencesClearedWhenIdle = true;
-            // Clear the playlist snapshot so the next show start gets a fresh one
-            if (!empty($lastActivePlaylists)) {
-                clearPlaylistSnapshot($lastActivePlaylists);
-                $lastActivePlaylists = '';
+            // Clear all playlist snapshots so the next show start gets fresh ones.
+            // We clear everything in the snapshot key rather than tracking which
+            // playlist was active — simpler and equally correct since idle means
+            // the show is done for now.
+            $idleState = loadCooldownState();
+            if (!empty($idleState['snapshot'])) {
+                $idleState['snapshot'] = array();
+                saveCooldownState($idleState);
+                logEntry("[cooldown] Cleared playlist snapshots (show ended)");
             }
             logEntry_verbose("FPP idle. Cleared sequences on server.");
         }
@@ -799,13 +790,14 @@ while (true) {
     $sequencesClearedWhenIdle = false;
     $currentlyPlaying = getSequenceName($fppStatus);
 
-    // Detect playlist start — take a snapshot for cooldown re-insertion.
-    // Snapshot is taken once per show session; subsequent polls for the
-    // same playlist are no-ops inside maybeSnapshotPlaylist.
+    // Snapshot the main scheduled playlist for cooldown re-insertion.
+    // maybeSnapshotPlaylist is idempotent — it only writes once and never
+    // overwrites an existing snapshot. We call it every loop so we don't
+    // need to track playlist transitions; it's a no-op after the first call.
+    // Never snapshot the remotePlaylist (ShowPilot's request pool).
     $currentPlaylistNow = isset($fppStatus->current_playlist->playlist)
         ? $fppStatus->current_playlist->playlist : '';
-    if (!empty($currentPlaylistNow) && $currentPlaylistNow !== $lastActivePlaylists) {
-        $lastActivePlaylists = $currentPlaylistNow;
+    if (!empty($currentPlaylistNow) && $currentPlaylistNow !== $cfg['remotePlaylist']) {
         maybeSnapshotPlaylist($currentPlaylistNow);
     }
 
@@ -928,13 +920,13 @@ while (true) {
         $state = ofGetState();
         if ($state !== null) {
             // Apply playlist cooldown patches (v0.13.40+).
-            // ShowPilot tells us which sequences are in cooldown; we disable
-            // them in the FPP playlist file so they're skipped in rotation.
+            // Only patch the main scheduled playlist — never the remotePlaylist,
+            // which is ShowPilot's request pool and must not be modified.
             if (isset($state->playlistPatches) && is_array($state->playlistPatches)) {
                 $currentPlaylistName = isset($fppStatus->current_playlist->playlist)
                     ? $fppStatus->current_playlist->playlist
                     : '';
-                if (!empty($currentPlaylistName)) {
+                if (!empty($currentPlaylistName) && $currentPlaylistName !== $cfg['remotePlaylist']) {
                     applyPlaylistPatches($state->playlistPatches, $currentPlaylistName);
                 }
             }
@@ -1015,9 +1007,13 @@ while (true) {
     // Check for cooldown re-enables that have come due. This fires on every
     // loop iteration so re-enables are prompt even when $shouldCheck is false
     // (e.g. outside the request-fetch window) or ShowPilot is unreachable.
+    // Pass the current playlist only if it's the main one, not the remote pool.
     $currentPlaylistForReenables = isset($fppStatus->current_playlist->playlist)
         ? $fppStatus->current_playlist->playlist
         : '';
+    if ($currentPlaylistForReenables === $cfg['remotePlaylist']) {
+        $currentPlaylistForReenables = '';
+    }
     processPendingReenables($currentPlaylistForReenables);
 
     usleep($cfg['fppStatusCheckTime'] * 1000000);
