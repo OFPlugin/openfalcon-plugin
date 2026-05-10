@@ -78,8 +78,9 @@ if command -v node >/dev/null 2>&1; then
 fi
 
 # ---- Build C++ MultiSync plugin ----
-# Clean up old incorrectly-named .so if present
+# Clean up old incorrectly-named .so files if present
 rm -f "$PLUGIN_DIR/libfpp-showpilot-sync.so" 2>/dev/null || true
+rm -f "$PLUGIN_DIR/libshowpilot.so" 2>/dev/null || true
 
 if [ -f "$PLUGIN_DIR/Makefile" ] && [ -d "/opt/fpp/src" ]; then
     echo "Building ShowPilot MultiSync plugin..."
