@@ -360,6 +360,191 @@ function prettifyName($name) {
 // FPP helpers
 // ============================================================
 
+// ============================================================
+// Playlist cooldown patching (v0.13.40+)
+//
+// When ShowPilot puts a sequence in cooldown (it was requested/voted
+// and played), it sends playlistPatches in the /state response telling
+// the plugin to disable that sequence in FPP's playlist JSON. FPP skips
+// disabled entries when iterating the playlist, so the sequence won't
+// come up in normal rotation until re-enabled.
+//
+// Pending re-enables are persisted to a JSON file so they survive plugin
+// restarts. On each loop iteration we check if any have come due.
+//
+// The patch operates on the CURRENT playlist file directly. FPP re-reads
+// the playlist file on each loop iteration, so the change takes effect
+// on the very next song transition — no fppd restart needed.
+// ============================================================
+
+$cooldownStateFile = $settings['configDirectory'] . '/showpilot-cooldowns.json';
+
+// Load persistent cooldown state (re-enable timestamps)
+function loadCooldownState() {
+    global $cooldownStateFile;
+    if (!file_exists($cooldownStateFile)) return array();
+    $json = @file_get_contents($cooldownStateFile);
+    if ($json === false) return array();
+    $data = json_decode($json, true);
+    return is_array($data) ? $data : array();
+}
+
+// Save persistent cooldown state
+function saveCooldownState($state) {
+    global $cooldownStateFile;
+    @file_put_contents($cooldownStateFile, json_encode($state, JSON_PRETTY_PRINT));
+}
+
+// Apply playlistPatches from a /state response.
+// Each patch: { sequenceName: string, enabled: bool, reenableAt: string|null }
+// sequenceName is the name WITHOUT extension (same as ShowPilot DB name).
+// We match against FPP playlist entries by stripping extension from sequenceName.
+function applyPlaylistPatches($patches, $currentPlaylist) {
+    if (empty($currentPlaylist) || !is_array($patches) || count($patches) === 0) return;
+
+    $playlistPath = '/home/fpp/media/playlists/' . $currentPlaylist . '.json';
+    if (!file_exists($playlistPath)) {
+        logEntry("[cooldown] Playlist file not found: $playlistPath");
+        return;
+    }
+
+    $json = @file_get_contents($playlistPath);
+    if ($json === false) return;
+    $data = json_decode($json, true);
+    if (!is_array($data) || !isset($data['mainPlaylist'])) return;
+
+    // Build lookup: name-without-ext => desired enabled state
+    $patchMap = array();
+    foreach ($patches as $patch) {
+        $name = isset($patch['sequenceName']) ? $patch['sequenceName'] : '';
+        if ($name === '') continue;
+        $patchMap[$name] = array(
+            'enabled'    => !empty($patch['enabled']),
+            'reenableAt' => isset($patch['reenableAt']) ? $patch['reenableAt'] : null,
+        );
+    }
+
+    $modified = false;
+    foreach ($data['mainPlaylist'] as &$item) {
+        // Get the name-without-extension of this playlist entry
+        $entryFile = '';
+        if (isset($item['sequenceName']) && $item['sequenceName'] !== '') {
+            $entryFile = $item['sequenceName'];
+        } elseif (isset($item['mediaName']) && $item['mediaName'] !== '') {
+            $entryFile = $item['mediaName'];
+        }
+        if ($entryFile === '') continue;
+
+        $entryName = pathinfo($entryFile, PATHINFO_FILENAME);
+        if (!isset($patchMap[$entryName])) continue;
+
+        $desiredEnabled = $patchMap[$entryName]['enabled'] ? 1 : 0;
+        $currentEnabled = isset($item['enabled']) ? intval($item['enabled']) : 1;
+
+        if ($currentEnabled !== $desiredEnabled) {
+            $item['enabled'] = $desiredEnabled;
+            $modified = true;
+            $action = $desiredEnabled ? 'enabled' : 'disabled';
+            logEntry("[cooldown] $action '$entryName' in playlist '$currentPlaylist'");
+        }
+    }
+    unset($item);
+
+    if (!$modified) return;
+
+    // Write back atomically: write to a temp file then rename
+    $tmp = $playlistPath . '.tmp';
+    $written = @file_put_contents($tmp, json_encode($data, JSON_PRETTY_PRINT));
+    if ($written === false) {
+        logEntry("[cooldown] ERROR: could not write playlist temp file");
+        return;
+    }
+    if (!@rename($tmp, $playlistPath)) {
+        logEntry("[cooldown] ERROR: could not rename temp playlist file");
+        @unlink($tmp);
+        return;
+    }
+
+    // Persist re-enable timestamps for sequences being disabled
+    $state = loadCooldownState();
+    foreach ($patches as $patch) {
+        $name = isset($patch['sequenceName']) ? $patch['sequenceName'] : '';
+        if ($name === '' || !empty($patch['enabled'])) {
+            // Either no name or this is a re-enable patch — remove from state
+            if ($name !== '') unset($state[$name]);
+            continue;
+        }
+        if (!empty($patch['reenableAt'])) {
+            $state[$name] = array(
+                'reenableAt'      => $patch['reenableAt'],
+                'playlist'        => $currentPlaylist,
+            );
+        }
+    }
+    saveCooldownState($state);
+}
+
+// Check if any pending re-enables have come due; patch playlist if so.
+// Called on every loop iteration so re-enables fire promptly even if
+// ShowPilot is temporarily unreachable.
+function processPendingReenables($currentPlaylist) {
+    $state = loadCooldownState();
+    if (empty($state)) return;
+
+    $now = time();
+    $changed = false;
+
+    foreach ($state as $name => $entry) {
+        $reenableAt = isset($entry['reenableAt']) ? strtotime($entry['reenableAt']) : 0;
+        if ($reenableAt === false || $reenableAt > $now) continue;
+
+        // Due — re-enable in the playlist file
+        $playlist = isset($entry['playlist']) ? $entry['playlist'] : $currentPlaylist;
+        if (empty($playlist)) {
+            unset($state[$name]);
+            $changed = true;
+            continue;
+        }
+
+        $playlistPath = '/home/fpp/media/playlists/' . $playlist . '.json';
+        if (!file_exists($playlistPath)) {
+            unset($state[$name]);
+            $changed = true;
+            continue;
+        }
+
+        $json = @file_get_contents($playlistPath);
+        if ($json === false) { continue; }
+        $data = json_decode($json, true);
+        if (!is_array($data) || !isset($data['mainPlaylist'])) { continue; }
+
+        $modified = false;
+        foreach ($data['mainPlaylist'] as &$item) {
+            $entryFile = isset($item['sequenceName']) ? $item['sequenceName']
+                       : (isset($item['mediaName']) ? $item['mediaName'] : '');
+            if ($entryFile === '') continue;
+            if (pathinfo($entryFile, PATHINFO_FILENAME) !== $name) continue;
+            if (!isset($item['enabled']) || intval($item['enabled']) !== 1) {
+                $item['enabled'] = 1;
+                $modified = true;
+                logEntry("[cooldown] Re-enabled '$name' in playlist '$playlist' (cooldown expired)");
+            }
+        }
+        unset($item);
+
+        if ($modified) {
+            $tmp = $playlistPath . '.tmp';
+            $written = @file_put_contents($tmp, json_encode($data, JSON_PRETTY_PRINT));
+            if ($written !== false) @rename($tmp, $playlistPath);
+        }
+
+        unset($state[$name]);
+        $changed = true;
+    }
+
+    if ($changed) saveCooldownState($state);
+}
+
 function getFppStatus() {
     $options = array('http' => array('timeout' => 5));
     $context = stream_context_create($options);
@@ -458,6 +643,12 @@ $sequencesClearedWhenIdle = false;
 // don't round-trip on every loop iteration just to know voting vs jukebox.
 $cachedMode = null;
 $cachedModeAt = 0;
+
+// On startup: process any cooldown re-enables that came due while the plugin
+// was stopped. Pass empty string for playlist — processPendingReenables uses
+// the stored playlist name from the cooldown state file, so it works even
+// before the first FPP status poll.
+processPendingReenables('');
 
 while (true) {
     // Refresh settings each loop — allows the FPP UI to change things live
@@ -641,6 +832,18 @@ while (true) {
     if ($shouldCheck && !empty($cfg['remotePlaylist'])) {
         $state = ofGetState();
         if ($state !== null) {
+            // Apply playlist cooldown patches (v0.13.40+).
+            // ShowPilot tells us which sequences are in cooldown; we disable
+            // them in the FPP playlist file so they're skipped in rotation.
+            if (isset($state->playlistPatches) && is_array($state->playlistPatches)) {
+                $currentPlaylistName = isset($fppStatus->current_playlist->playlist)
+                    ? $fppStatus->current_playlist->playlist
+                    : '';
+                if (!empty($currentPlaylistName)) {
+                    applyPlaylistPatches($state->playlistPatches, $currentPlaylistName);
+                }
+            }
+
             $nextSeq = null;
             $nextIdx = null;
 
@@ -713,6 +916,14 @@ while (true) {
             }
         }
     }
+
+    // Check for cooldown re-enables that have come due. This fires on every
+    // loop iteration so re-enables are prompt even when $shouldCheck is false
+    // (e.g. outside the request-fetch window) or ShowPilot is unreachable.
+    $currentPlaylistForReenables = isset($fppStatus->current_playlist->playlist)
+        ? $fppStatus->current_playlist->playlist
+        : '';
+    processPendingReenables($currentPlaylistForReenables);
 
     usleep($cfg['fppStatusCheckTime'] * 1000000);
 }
