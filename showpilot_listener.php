@@ -814,19 +814,15 @@ while (true) {
         $lastPlayingReported = $currentlyPlaying;
 
         // When a new sequence starts playing, clean up our queue tracking.
-        // If the sequence is one we queued: remove everything BEFORE it
-        //   (those played already) but KEEP the current entry so that
-        //   $isViewerRequestPlaying stays true for the song's full duration.
-        //   Without this, pendingRequests empties as soon as the song starts,
-        //   $isViewerRequestPlaying goes false, and a rapid second request
-        //   fires insertPlaylistImmediate while the first is still playing —
-        //   kicking the first song out of FPP's queue mid-play.
+        // If the sequence is one we queued: remove it AND everything before it
+        //   (those earlier ones must have played already; FIFO order).
         // If the sequence isn't ours: schedule has resumed — clear all.
+        // We no longer need to keep the playing entry in pendingRequests —
+        // interrupt decisions now use $playingFromRemote (current_playlist)
+        // instead of $isViewerRequestPlaying, which is more reliable.
         $idx = array_search($currentlyPlaying, $pendingRequests, true);
         if ($idx !== false) {
-            // Keep from $idx onward (current song stays so isViewerRequestPlaying
-            // remains true for the full duration, blocking further interrupts)
-            $pendingRequests = array_slice($pendingRequests, $idx);
+            $pendingRequests = array_slice($pendingRequests, $idx + 1);
         } else {
             // Could be schedule resuming, OR it could be an unrelated sequence
             // playing briefly between our requests. Be cautious — only clear
@@ -901,10 +897,31 @@ while (true) {
     $isVotingMode = ($cachedMode === 'VOTING');
     $effectiveInterrupt = $cfg['interruptSchedule'] && !$isVotingMode;
 
+    // Determine whether FPP is currently playing a viewer request (remote playlist)
+    // or the main scheduled playlist. This is the key signal for queue decisions:
+    //
+    //   main playlist playing → interrupt mode can fire insertPlaylistImmediate
+    //   remote playlist playing → a viewer request is active; use non-interrupt
+    //                             logic (queue near end of song, one at a time)
+    //
+    // This mirrors how Remote Falcon's plugin works — it uses current_playlist
+    // rather than tracking pending requests, which is simpler and more reliable.
+    $playingFromRemote = isset($fppStatus->current_playlist->playlist)
+        && $fppStatus->current_playlist->playlist === $cfg['remotePlaylist'];
+
     $shouldCheck = false;
-    if ($effectiveInterrupt) {
-        // Interrupt mode (jukebox only): check on every loop when not currently playing from remote playlist
+    if ($effectiveInterrupt && !$playingFromRemote) {
+        // Interrupt mode: main playlist is playing — check every loop so we
+        // can interrupt as soon as a request comes in.
         $shouldCheck = true;
+    } elseif ($effectiveInterrupt && $playingFromRemote) {
+        // Interrupt mode but a viewer request is currently playing — switch
+        // to non-interrupt behaviour: only queue near the end of the song
+        // so we don't overwrite FPP's single "after current" slot.
+        $secondsRemaining = intVal($fppStatus->seconds_remaining ?? 999);
+        if ($secondsRemaining <= $cfg['requestFetchTime']) {
+            $shouldCheck = true;
+        }
     } else {
         // Non-interrupt OR voting mode: only check when current song is about to end
         $secondsRemaining = intVal($fppStatus->seconds_remaining ?? 999);
@@ -913,8 +930,8 @@ while (true) {
         }
     }
 
-    // Avoid queueing twice for the same currently-playing sequence in non-interrupt mode
-    if ($shouldCheck && !$effectiveInterrupt) {
+    // Avoid queueing twice for the same currently-playing sequence
+    if ($shouldCheck) {
         if ($currentlyPlaying === $lastQueuedForSequence) {
             $sinceQueue = time() - $lastQueuedAt;
             if ($sinceQueue < ($cfg['requestFetchTime'] + $cfg['additionalWaitTime'] + 2)) {
@@ -952,38 +969,28 @@ while (true) {
             }
 
             if ($nextSeq !== null && $nextIdx !== null) {
-                // Avoid clobbering a viewer request that's already playing.
-                // Three checks together close timing races:
-                //   (a) currently-playing matches a sequence we previously queued
-                //       (FPP is currently playing a viewer request)
-                //   (b) we did an Immediate insert recently (FPP may not have
-                //       reported the new current_sequence yet — race window)
-                //   (c) we have any sequences queued that haven't played yet
-                //       (don't Immediate over a queued chain)
+                // Use current_playlist to decide insert strategy — same approach
+                // as RF's plugin. When main playlist is playing, interrupt it.
+                // When remote playlist is playing (viewer request active), queue
+                // after current. The $lastQueuedForSequence guard above prevents
+                // re-queueing for the same song within the timing window.
                 $within_cooldown = ($lastImmediateAt > 0 && (time() - $lastImmediateAt) < 8);
-                $isViewerRequestPlaying = in_array($currentlyPlaying, $pendingRequests, true);
-                $haveQueuedRequests = count($pendingRequests) > 0;
-                $shouldQueue = $within_cooldown || $isViewerRequestPlaying || $haveQueuedRequests;
 
-                if ($effectiveInterrupt && !$shouldQueue) {
+                if ($effectiveInterrupt && !$playingFromRemote && !$within_cooldown) {
                     logEntry("Interrupting schedule with: $nextSeq at playlist index $nextIdx");
                     insertPlaylistImmediate($cfg['remotePlaylist'], $nextIdx);
                     $lastImmediateAt = time();
                     $pendingRequests[] = $nextSeq;
                 } else {
-                    // Voting mode always lands here (effectiveInterrupt is
-                    // false for voting), as does the configured non-interrupt
-                    // case for jukebox. The reason string explains why we
-                    // chose the queued path so logs are easy to follow.
+                    // Queue after current — covers: voting mode, non-interrupt
+                    // jukebox, viewer request already playing, recent interrupt.
                     $reason = $isVotingMode
                         ? "voting mode (winner queued for after current song)"
                         : (!$cfg['interruptSchedule']
                             ? "non-interrupt mode"
-                            : ($isViewerRequestPlaying
+                            : ($playingFromRemote
                                 ? "viewer request playing"
-                                : ($haveQueuedRequests
-                                    ? "requests still in queue"
-                                    : "cooldown after recent insert")));
+                                : "cooldown after recent insert"));
                     logEntry("Queueing after current ($reason): $nextSeq at playlist index $nextIdx");
                     insertPlaylistAfterCurrent($cfg['remotePlaylist'], $nextIdx);
                     $pendingRequests[] = $nextSeq;
