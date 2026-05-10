@@ -699,6 +699,12 @@ $lastInsertedSequence = "";   // (legacy; kept for compat — no longer drives l
 $lastImmediateAt = 0;         // Timestamp of last Immediate insert. We treat the
                               // ~8 seconds after as "request still settling" so
                               // rapid follow-up requests queue, not clobber.
+$lastRemoteEndedAt = 0;       // Timestamp when current_playlist last switched FROM
+                              // remote back to main. Suppress insertPlaylistImmediate
+                              // briefly after this to avoid racing with the queued
+                              // song FPP is about to start.
+$lastWasRemote = false;       // Tracks previous loop's $playingFromRemote value
+                              // so we can detect the remote→main transition.
 $pendingRequests = array();   // Sequences we've queued/inserted that haven't
                               // yet been confirmed as played. As long as this
                               // is non-empty, new requests get queued (After Current).
@@ -771,6 +777,8 @@ while (true) {
             $lastImmediateAt = 0;
             $pendingRequests = array();
             $sequencesClearedWhenIdle = true;
+            $lastRemoteEndedAt = 0;
+            $lastWasRemote = false;
             // Clear all playlist snapshots so the next show start gets fresh ones.
             // We clear everything in the snapshot key rather than tracking which
             // playlist was active — simpler and equally correct since idle means
@@ -909,6 +917,17 @@ while (true) {
     $playingFromRemote = isset($fppStatus->current_playlist->playlist)
         && $fppStatus->current_playlist->playlist === $cfg['remotePlaylist'];
 
+    // Detect remote→main transition. When a viewer request finishes and FPP
+    // switches back to the main playlist, record the time. We suppress
+    // insertPlaylistImmediate for a few seconds after this transition to avoid
+    // a race where the plugin interrupts before FPP has started the next queued
+    // song (insertPlaylistAfterCurrent queued near the end of the request).
+    if ($lastWasRemote && !$playingFromRemote) {
+        $lastRemoteEndedAt = time();
+        logEntry_verbose("Remote playlist ended — suppressing interrupts briefly");
+    }
+    $lastWasRemote = $playingFromRemote;
+
     $shouldCheck = false;
     if ($effectiveInterrupt && !$playingFromRemote) {
         // Interrupt mode: main playlist is playing — check every loop so we
@@ -975,8 +994,11 @@ while (true) {
                 // after current. The $lastQueuedForSequence guard above prevents
                 // re-queueing for the same song within the timing window.
                 $within_cooldown = ($lastImmediateAt > 0 && (time() - $lastImmediateAt) < 8);
+                // Also suppress interrupts briefly after remote playlist ends —
+                // FPP needs a moment to start the queued afterCurrent song.
+                $afterRemoteTransition = ($lastRemoteEndedAt > 0 && (time() - $lastRemoteEndedAt) < 10);
 
-                if ($effectiveInterrupt && !$playingFromRemote && !$within_cooldown) {
+                if ($effectiveInterrupt && !$playingFromRemote && !$within_cooldown && !$afterRemoteTransition) {
                     logEntry("Interrupting schedule with: $nextSeq at playlist index $nextIdx");
                     insertPlaylistImmediate($cfg['remotePlaylist'], $nextIdx);
                     $lastImmediateAt = time();

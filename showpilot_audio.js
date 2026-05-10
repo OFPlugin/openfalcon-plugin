@@ -246,6 +246,10 @@ function broadcastPosition() {
 let lastSyncPointAt = 0;
 function broadcastSyncPointIfDue() {
   if (wsClients.size === 0) return;
+  // Don't broadcast syncPoints when nothing is playing or filename isn't known yet.
+  // The viewer uses syncPoints to snap audio position — a null/not-playing syncPoint
+  // would snap it back to 0:00 and destroy sync.
+  if (!fppStatus.playing || !fppStatus.filename) return;
   const now = Date.now();
   if (now - lastSyncPointAt < 1000) return;
   lastSyncPointAt = now;
