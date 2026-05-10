@@ -814,12 +814,19 @@ while (true) {
         $lastPlayingReported = $currentlyPlaying;
 
         // When a new sequence starts playing, clean up our queue tracking.
-        // If the sequence is one we queued: remove it AND everything before it
-        //   (those earlier ones must have played already; FIFO order).
+        // If the sequence is one we queued: remove everything BEFORE it
+        //   (those played already) but KEEP the current entry so that
+        //   $isViewerRequestPlaying stays true for the song's full duration.
+        //   Without this, pendingRequests empties as soon as the song starts,
+        //   $isViewerRequestPlaying goes false, and a rapid second request
+        //   fires insertPlaylistImmediate while the first is still playing —
+        //   kicking the first song out of FPP's queue mid-play.
         // If the sequence isn't ours: schedule has resumed — clear all.
         $idx = array_search($currentlyPlaying, $pendingRequests, true);
         if ($idx !== false) {
-            $pendingRequests = array_slice($pendingRequests, $idx + 1);
+            // Keep from $idx onward (current song stays so isViewerRequestPlaying
+            // remains true for the full duration, blocking further interrupts)
+            $pendingRequests = array_slice($pendingRequests, $idx);
         } else {
             // Could be schedule resuming, OR it could be an unrelated sequence
             // playing briefly between our requests. Be cautious — only clear
@@ -958,19 +965,7 @@ while (true) {
                 $haveQueuedRequests = count($pendingRequests) > 0;
                 $shouldQueue = $within_cooldown || $isViewerRequestPlaying || $haveQueuedRequests;
 
-                // Don't re-insert a sequence already in our pending queue.
-                // ShowPilot keeps returning the same nextRequest until the
-                // plugin confirms it started playing (via /playing). Without
-                // this guard, $shouldCheck fires near the end of each queued
-                // song and inserts the next one a second time — causing
-                // doubles in FPP's queue and skipped songs.
-                if (in_array($nextSeq, $pendingRequests, true)) {
-                    logEntry_verbose("Already queued '$nextSeq' — skipping duplicate insert");
-                    if (!$effectiveInterrupt) {
-                        $lastQueuedForSequence = $currentlyPlaying;
-                        $lastQueuedAt = time();
-                    }
-                } elseif ($effectiveInterrupt && !$shouldQueue) {
+                if ($effectiveInterrupt && !$shouldQueue) {
                     logEntry("Interrupting schedule with: $nextSeq at playlist index $nextIdx");
                     insertPlaylistImmediate($cfg['remotePlaylist'], $nextIdx);
                     $lastImmediateAt = time();
