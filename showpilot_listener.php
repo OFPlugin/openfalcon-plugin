@@ -1075,18 +1075,22 @@ while (true) {
                 $nextSeq = $state->nextRequest->sequence ?? null;
                 $nextIdx = $state->nextRequest->playlistIndex ?? null;
                 if ($nextSeq) logEntry("Jukebox: next request is $nextSeq (index $nextIdx)");
-            } elseif (isset($state->mode) && $state->mode === 'RACE' && isset($state->raceWinner)) {
-                // Race mode (v0.13.58+): ShowPilot sends the winner with an
-                // interrupt flag. Read it from fresh state here.
-                $raceInterrupt = !empty($state->raceWinner->interrupt);
-                $secondsRemaining = intVal($fppStatus->seconds_remaining ?? 999);
-                // Only act now if: interrupt is on, OR we are near end of song
-                if ($raceInterrupt || $secondsRemaining < $cfg['requestFetchTime']) {
-                    $nextSeq = $state->raceWinner->sequence ?? null;
-                    $nextIdx = $state->raceWinner->playlistIndex ?? null;
-                    if ($nextSeq) logEntry("Race: winner is $nextSeq (index $nextIdx, interrupt=" . ($raceInterrupt ? 'yes' : 'no') . ")");
+            } elseif (isset($state->mode) && $state->mode === 'RACE') {
+                // Race mode (v0.13.58+)
+                if (isset($state->raceWinner)) {
+                    $raceInterrupt = !empty($state->raceWinner->interrupt);
+                    $secondsRemaining = intVal($fppStatus->seconds_remaining ?? 999);
+                    logEntry("Race winner available: " . ($state->raceWinner->sequence ?? 'null') . " interrupt=" . ($raceInterrupt ? 'yes' : 'no') . " secs_remaining={$secondsRemaining} fetchTime=" . $cfg['requestFetchTime']);
+                    // Act now if interrupt is on, OR we are near end of song
+                    if ($raceInterrupt || $secondsRemaining < $cfg['requestFetchTime']) {
+                        $nextSeq = $state->raceWinner->sequence ?? null;
+                        $nextIdx = $state->raceWinner->playlistIndex ?? null;
+                        if ($nextSeq) logEntry("Race: queuing winner $nextSeq (index $nextIdx, interrupt=" . ($raceInterrupt ? 'yes' : 'no') . ")");
+                    } else {
+                        logEntry("Race winner pending, waiting for end of song ({$secondsRemaining}s remaining, need <" . $cfg['requestFetchTime'] . ")");
+                    }
                 } else {
-                    logEntry_verbose("Race winner pending, waiting for end of song ({$secondsRemaining}s remaining)");
+                    logEntry_verbose("Race mode active, no winner yet");
                 }
             }
 
