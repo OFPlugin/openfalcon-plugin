@@ -997,7 +997,12 @@ while (true) {
         }
     }
     $isVotingMode = ($cachedMode === 'VOTING');
-    $effectiveInterrupt = $cfg['interruptSchedule'] && !$isVotingMode;
+    $isRaceMode   = ($cachedMode === 'RACE');
+    // Race mode honours interruptSchedule when the race_interrupt_winner flag
+    // is set in the state response (v0.13.58+). Voting mode never interrupts
+    // (cutting a song short every voting round would be wrong).
+    $raceInterrupt = $isRaceMode && isset($modeState->raceWinner->interrupt) && $modeState->raceWinner->interrupt;
+    $effectiveInterrupt = $cfg['interruptSchedule'] && (!$isVotingMode) && (!$isRaceMode || $raceInterrupt);
 
     // ----------------------------------------------------------------
     // Queue decision logic
@@ -1063,6 +1068,13 @@ while (true) {
                 $nextSeq = $state->nextRequest->sequence ?? null;
                 $nextIdx = $state->nextRequest->playlistIndex ?? null;
                 if ($nextSeq) logEntry("Jukebox: next request is $nextSeq (index $nextIdx)");
+            } elseif (isset($state->mode) && $state->mode === 'RACE' && isset($state->raceWinner)) {
+                // Race mode (v0.13.58+): ShowPilot resolves the winner and sends
+                // it here. The interrupt flag on raceWinner drives effectiveInterrupt
+                // above so the correct insert path fires automatically.
+                $nextSeq = $state->raceWinner->sequence ?? null;
+                $nextIdx = $state->raceWinner->playlistIndex ?? null;
+                if ($nextSeq) logEntry("Race: winner is $nextSeq (index $nextIdx, interrupt=" . ($state->raceWinner->interrupt ? 'yes' : 'no') . ")");
             }
 
             if ($nextSeq !== null && $nextIdx !== null) {
