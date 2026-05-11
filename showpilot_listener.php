@@ -1066,6 +1066,7 @@ while (true) {
 
             $nextSeq = null;
             $nextIdx = null;
+            $raceInterrupt = false; // overridden inside RACE block if applicable
 
             if (isset($state->mode) && $state->mode === 'VOTING' && isset($state->winningVote)) {
                 $nextSeq = $state->winningVote->sequence ?? null;
@@ -1108,7 +1109,7 @@ while (true) {
                     // Rebuild the dynamic queue playlist file with all pending songs
                     $rebuilt = rebuildQueuePlaylist($pendingQueue);
 
-                    if (!$playingFromRemote && $queueCount === 1) {
+                    if (!$playingFromRemote && $queueCount === 1 && ($effectiveInterrupt || $raceInterrupt)) {
                         // First request, main playlist playing — interrupt immediately
                         logEntry("Interrupting schedule with: $nextSeq at playlist index $nextIdx");
                         insertPlaylistImmediate($cfg['remotePlaylist'], $nextIdx);
