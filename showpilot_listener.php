@@ -914,18 +914,26 @@ while (true) {
         }
         if ($foundIdx >= 0) {
             $pendingQueue = array_slice($pendingQueue, $foundIdx + 1);
-            // Rebuild FPP's after-current with remaining songs
+            // FPP already has the remaining songs queued from the original
+            // insertPlaylistAfterCurrent range — no need to re-insert.
+            // Re-inserting while FPP is already playing from ShowPilot Queue
+            // resets FPP's internal queue pointer and causes it to loop back
+            // to song 1 instead of continuing to the next queued song.
+            // We only re-insert when a NEW request is added (handled below).
             if (!empty($pendingQueue)) {
-                rebuildQueuePlaylist($pendingQueue);
-                $remaining = count($pendingQueue);
-                insertPlaylistAfterCurrent('ShowPilot Queue', 1, $remaining);
-                logEntry_verbose("Rebuilt queue after '$currentlyPlaying' played: $remaining songs remaining");
+                logEntry_verbose("Queue advanced past '$currentlyPlaying': " . count($pendingQueue) . " songs remaining");
+            } else {
+                logEntry_verbose("Queue exhausted after '$currentlyPlaying'");
             }
         } else {
-            // Not one of ours — schedule resumed, clear pending queue
-            $playingFromRemote = isset($fppStatus->current_playlist->playlist)
-                && $fppStatus->current_playlist->playlist === $cfg['remotePlaylist'];
-            if (!$playingFromRemote && !empty($pendingQueue)) {
+            // Not one of ours — schedule resumed, clear pending queue.
+            // But don't clear if we're still playing from ShowPilot Queue
+            // (FPP is advancing through our queued range).
+            $currentPlaylistNow2 = isset($fppStatus->current_playlist->playlist)
+                ? $fppStatus->current_playlist->playlist : '';
+            $playingFromRemote = ($currentPlaylistNow2 === $cfg['remotePlaylist']);
+            $playingFromQueue  = ($currentPlaylistNow2 === 'ShowPilot Queue');
+            if (!$playingFromRemote && !$playingFromQueue && !empty($pendingQueue)) {
                 logEntry_verbose("Schedule resumed; clearing pending queue");
                 $pendingQueue = array();
             }
