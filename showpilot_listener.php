@@ -998,11 +998,10 @@ while (true) {
     }
     $isVotingMode = ($cachedMode === 'VOTING');
     $isRaceMode   = ($cachedMode === 'RACE');
-    // Race mode honours interruptSchedule when the race_interrupt_winner flag
-    // is set in the state response (v0.13.58+). Voting mode never interrupts
-    // (cutting a song short every voting round would be wrong).
-    $raceInterrupt = $isRaceMode && isset($modeState->raceWinner->interrupt) && $modeState->raceWinner->interrupt;
-    $effectiveInterrupt = $cfg['interruptSchedule'] && (!$isVotingMode) && (!$isRaceMode || $raceInterrupt);
+    // For race mode we need the fresh state to know if interrupt is set,
+    // so we start conservative (no interrupt) and override inside $shouldCheck
+    // after fetching fresh state. Voting never interrupts.
+    $effectiveInterrupt = $cfg['interruptSchedule'] && !$isVotingMode && !$isRaceMode;
 
     // ----------------------------------------------------------------
     // Queue decision logic
@@ -1029,8 +1028,10 @@ while (true) {
 
     // Always check for new requests — we handle rate limiting via $lastQueuedAt
     $shouldCheck = true;
-    // In non-interrupt / voting mode, only check near end of song
-    if (!$effectiveInterrupt || $isVotingMode) {
+    // In non-interrupt / voting mode, only check near end of song.
+    // Race mode: we always check so we can read the interrupt flag from
+    // fresh state; if interrupt is off we gate on seconds_remaining below.
+    if (!$effectiveInterrupt && !$isRaceMode || $isVotingMode) {
         $secondsRemaining = intVal($fppStatus->seconds_remaining ?? 999);
         $shouldCheck = ($secondsRemaining < $cfg['requestFetchTime']);
     }
@@ -1069,12 +1070,18 @@ while (true) {
                 $nextIdx = $state->nextRequest->playlistIndex ?? null;
                 if ($nextSeq) logEntry("Jukebox: next request is $nextSeq (index $nextIdx)");
             } elseif (isset($state->mode) && $state->mode === 'RACE' && isset($state->raceWinner)) {
-                // Race mode (v0.13.58+): ShowPilot resolves the winner and sends
-                // it here. The interrupt flag on raceWinner drives effectiveInterrupt
-                // above so the correct insert path fires automatically.
-                $nextSeq = $state->raceWinner->sequence ?? null;
-                $nextIdx = $state->raceWinner->playlistIndex ?? null;
-                if ($nextSeq) logEntry("Race: winner is $nextSeq (index $nextIdx, interrupt=" . ($state->raceWinner->interrupt ? 'yes' : 'no') . ")");
+                // Race mode (v0.13.58+): ShowPilot sends the winner with an
+                // interrupt flag. Read it from fresh state here.
+                $raceInterrupt = !empty($state->raceWinner->interrupt);
+                $secondsRemaining = intVal($fppStatus->seconds_remaining ?? 999);
+                // Only act now if: interrupt is on, OR we are near end of song
+                if ($raceInterrupt || $secondsRemaining < $cfg['requestFetchTime']) {
+                    $nextSeq = $state->raceWinner->sequence ?? null;
+                    $nextIdx = $state->raceWinner->playlistIndex ?? null;
+                    if ($nextSeq) logEntry("Race: winner is $nextSeq (index $nextIdx, interrupt=" . ($raceInterrupt ? 'yes' : 'no') . ")");
+                } else {
+                    logEntry_verbose("Race winner pending, waiting for end of song ({$secondsRemaining}s remaining)");
+                }
             }
 
             if ($nextSeq !== null && $nextIdx !== null) {
