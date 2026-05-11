@@ -1029,9 +1029,15 @@ while (true) {
     // Always check for new requests — we handle rate limiting via $lastQueuedAt
     $shouldCheck = true;
     // In non-interrupt / voting mode, only check near end of song.
-    // Race mode: we always check so we can read the interrupt flag from
-    // fresh state; if interrupt is off we gate on seconds_remaining below.
+    // Race mode always fetches fresh state so the inner race block can
+    // apply its own seconds_remaining gate based on the interrupt flag.
     if (!$effectiveInterrupt && !$isRaceMode || $isVotingMode) {
+        $secondsRemaining = intVal($fppStatus->seconds_remaining ?? 999);
+        $shouldCheck = ($secondsRemaining < $cfg['requestFetchTime']);
+    }
+    // For race mode with no interrupt configured, also gate on seconds_remaining
+    // here to avoid hammering the API every second while waiting for song end.
+    if ($isRaceMode && !$cfg['interruptSchedule']) {
         $secondsRemaining = intVal($fppStatus->seconds_remaining ?? 999);
         $shouldCheck = ($secondsRemaining < $cfg['requestFetchTime']);
     }
