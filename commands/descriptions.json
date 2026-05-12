@@ -20,6 +20,11 @@
     "args": []
   },
   {
+    "name": "ShowPilot - Switch to Race Mode",
+    "script": "set_mode_race.php",
+    "args": []
+  },
+  {
     "name": "ShowPilot - Restart Listener",
     "script": "restart_listener.php",
     "args": []
